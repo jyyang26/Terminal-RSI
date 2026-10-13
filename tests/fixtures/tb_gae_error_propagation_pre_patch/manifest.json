@@ -1,0 +1,10 @@
+{
+  "slime_plugins/harbor/rollout.py": {
+    "snapshot": "rollout.py.txt",
+    "sha256": "0cd5157174a24f681129848a6bab386a8ae5835296a5a0a8c71520f154bf56de"
+  },
+  "TB_GAE_IMPLEMENTATION_REPORT_20260927.md": {
+    "snapshot": "TB_GAE_IMPLEMENTATION_REPORT_20260927.md.txt",
+    "sha256": "075f7d9a6cefcbde7718478bccc33b02a0cd545f1529b34d805682aaf724bb0a"
+  }
+}

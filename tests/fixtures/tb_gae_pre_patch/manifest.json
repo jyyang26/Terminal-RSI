@@ -1,0 +1,50 @@
+{
+  "slime/utils/arguments.py": {
+    "snapshot": "slime__utils__arguments.py.txt",
+    "sha256": "99c3c7c79a4ebd44140e72a383d80e66ca36e324e6311f7cbae782c101b8a92d"
+  },
+  "slime/utils/types.py": {
+    "snapshot": "slime__utils__types.py.txt",
+    "sha256": "6fd7602fbf5e298dbad3cbead6a9521ae263f6ea5905717a5c24fb82cdcebcd0"
+  },
+  "slime/utils/ppo_utils.py": {
+    "snapshot": "slime__utils__ppo_utils.py.txt",
+    "sha256": "3b2175b9ac5f61af5539a3ac99eb3f4b4a353f42486fd43eec22f822cb325020"
+  },
+  "slime/utils/dp_schedule.py": {
+    "snapshot": "slime__utils__dp_schedule.py.txt",
+    "sha256": "b4e9a359353fed63e267e4632ceca11d617c2e52e20032d813c9b04e8705eded"
+  },
+  "slime/backends/megatron_utils/loss.py": {
+    "snapshot": "slime__backends__megatron_utils__loss.py.txt",
+    "sha256": "eb2dbaea0470de259e543f58621205c6c9022a8fcea1dbde953098d4fd8aceea"
+  },
+  "slime/backends/megatron_utils/data.py": {
+    "snapshot": "slime__backends__megatron_utils__data.py.txt",
+    "sha256": "75b95683d6cd077413f4c8f372928f60cd667771e69233594ca7bc02550b0c64"
+  },
+  "slime/backends/megatron_utils/cp_utils.py": {
+    "snapshot": "slime__backends__megatron_utils__cp_utils.py.txt",
+    "sha256": "01b941ae63a2aed5f5fd645ff31f8911ca3f8123c5800943ec09d8cbd8b0869c"
+  },
+  "slime/ray/rollout.py": {
+    "snapshot": "slime__ray__rollout.py.txt",
+    "sha256": "67220c86eedb688fdedb757bec1f4861304f05481dd834a2bbf3e6f9865475fa"
+  },
+  "slime_plugins/harbor/atif_adapter.py": {
+    "snapshot": "slime_plugins__harbor__atif_adapter.py.txt",
+    "sha256": "5d94e78f0b20fce6f44ce9f0430036b596765134680452415d22c6a8e5ff4717"
+  },
+  "slime_plugins/harbor/sample_postprocess.py": {
+    "snapshot": "slime_plugins__harbor__sample_postprocess.py.txt",
+    "sha256": "782988699f3f0feb94727b9097376013abe50b561445f7b205dd96971eb2560b"
+  },
+  "slime_plugins/harbor/tb_gae.py": {
+    "snapshot": "slime_plugins__harbor__tb_gae.py.txt",
+    "sha256": "be6fb504f75cb4e67aa1b39f4ebfd7efe443da61e41aa50999648fc5c6578e97"
+  },
+  "slime_plugins/harbor/rollout.py": {
+    "snapshot": "slime_plugins__harbor__rollout.py.txt",
+    "sha256": "d51697c5236d77fd9ba29197c2623929f7b4e8b6a6bcd17bff2661a05f3628c3"
+  }
+}

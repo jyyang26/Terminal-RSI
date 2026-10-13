@@ -1,0 +1,26 @@
+# Terminal-RSI | RPR-1 per-role Megatron overrides (passed via --megatron-config-path).
+#
+# Actor and critic need different optimizer settings, which a single top-level CLI
+# flag cannot express. Everything not listed here is inherited from the CLI args.
+#
+#   actor : lr 5e-7 (constant), clip_grad inherited (1.0)
+#   critic: lr 1.5e-5 (30x actor), value_clip 4.0, clip_grad 100.0
+#
+# value_clip / clip_grad are relaxed for the CRITIC ONLY so that a warm-started value
+# head can re-calibrate quickly to the FDR reward scale; the actor keeps the default
+# gradient clip to protect the policy.
+
+megatron:
+  - name: terminal-rsi-27b-actor
+    role: actor
+    overrides:
+      lr: 5.0e-7
+      min_lr: 5.0e-7
+
+  - name: terminal-rsi-27b-critic
+    role: critic
+    overrides:
+      lr: 1.5e-5
+      min_lr: 1.5e-5
+      value_clip: 4.0
+      clip_grad: 100.0

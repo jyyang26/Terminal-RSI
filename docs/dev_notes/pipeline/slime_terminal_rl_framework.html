@@ -1,0 +1,1451 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>slime-terminal-RL 训练框架全景 · Qwen3.5-122B-A10B PPO · tmax-15k</title>
+<style>
+:root{
+  --bg:#0b0f16; --panel:#141a24; --panel2:#1b2330; --panel3:#232d3d; --border:#2c3746;
+  --txt:#e6edf3; --dim:#8b98a9; --dim2:#6b7688;
+  --launch:#e3b341;   /* 启动 / shell */
+  --ray:#f778ba;      /* ray / 调度 */
+  --rollout:#3fb950;  /* rollout / sglang */
+  --sandbox:#56d4dd;  /* 沙箱 / 环境 */
+  --buffer:#d29922;   /* data buffer */
+  --critic:#a371f7;   /* critic */
+  --actor:#58a6ff;    /* actor */
+  --sync:#ff7b72;     /* 权重同步 */
+  --accent:#79c0ff;
+  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth}
+body{background:var(--bg);color:var(--txt);
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+  line-height:1.65;font-size:14.5px;padding-bottom:80px}
+
+/* ---------- layout ---------- */
+header{padding:26px 34px 20px;border-bottom:1px solid var(--border);
+  background:radial-gradient(1200px 300px at 20% -50%,rgba(88,166,255,.18),transparent),linear-gradient(180deg,#151c27,#0b0f16)}
+h1{font-size:25px;font-weight:750;letter-spacing:.2px}
+h1 .tag{font-size:13px;color:var(--dim);font-weight:400;margin-left:12px;font-family:var(--mono)}
+.sub{color:var(--dim);font-size:13.5px;margin-top:8px;max-width:1150px}
+.kv{display:flex;flex-wrap:wrap;gap:8px;margin-top:16px}
+.kv code{background:var(--panel2);border:1px solid var(--border);border-radius:6px;padding:3px 9px;
+  font-family:var(--mono);font-size:11.5px;color:var(--accent)}
+nav{position:sticky;top:0;z-index:50;background:rgba(11,15,22,.94);backdrop-filter:blur(10px);
+  border-bottom:1px solid var(--border);padding:10px 34px;display:flex;gap:6px;flex-wrap:wrap;font-size:12.5px}
+nav a{color:var(--dim);text-decoration:none;padding:4px 11px;border-radius:20px;border:1px solid transparent;white-space:nowrap}
+nav a:hover{color:var(--txt);border-color:var(--border);background:var(--panel)}
+main{max-width:1400px;margin:0 auto;padding:0 34px}
+section{padding:38px 0 10px;border-bottom:1px solid var(--border)}
+section:last-child{border-bottom:none}
+h2{font-size:20px;font-weight:700;display:flex;align-items:center;gap:11px;margin-bottom:6px}
+h2 .num{font-family:var(--mono);font-size:12px;color:#0b0f16;background:var(--accent);
+  border-radius:6px;padding:2px 8px;font-weight:700}
+h3{font-size:15.5px;font-weight:650;margin:26px 0 10px;color:var(--txt);display:flex;align-items:center;gap:8px}
+h3::before{content:"";width:4px;height:15px;background:var(--accent);border-radius:2px;display:inline-block}
+p{margin:9px 0;color:#c8d3e0}
+.lead{color:var(--dim);font-size:13.5px;margin-bottom:18px;max-width:1150px}
+code{font-family:var(--mono);font-size:12.5px;background:var(--panel2);padding:1.5px 5px;border-radius:4px;color:#9fd0ff}
+a.src{font-family:var(--mono);font-size:11px;color:var(--dim2);text-decoration:none;border-bottom:1px dotted var(--dim2)}
+b{color:#fff;font-weight:650}
+em{color:var(--accent);font-style:normal}
+
+/* ---------- generic cards ---------- */
+.card{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:16px 18px;margin:12px 0}
+.card.tight{padding:13px 15px}
+.grid{display:grid;gap:12px}
+.g2{grid-template-columns:repeat(2,1fr)}
+.g3{grid-template-columns:repeat(3,1fr)}
+.g4{grid-template-columns:repeat(4,1fr)}
+@media(max-width:1080px){.g2,.g3,.g4{grid-template-columns:1fr}}
+.note{border-left:3px solid var(--buffer);background:rgba(210,153,34,.07);border-radius:0 10px 10px 0;
+  padding:12px 16px;margin:14px 0;font-size:13px;color:#e8d9b0}
+.warn{border-left:3px solid var(--sync);background:rgba(255,123,114,.07);border-radius:0 10px 10px 0;
+  padding:12px 16px;margin:14px 0;font-size:13px;color:#ffc9c4}
+.ok{border-left:3px solid var(--rollout);background:rgba(63,185,80,.07);border-radius:0 10px 10px 0;
+  padding:12px 16px;margin:14px 0;font-size:13px;color:#b7f0c2}
+.note b,.warn b,.ok b{color:#fff}
+
+/* ---------- tables ---------- */
+table{width:100%;border-collapse:collapse;margin:12px 0;font-size:12.5px}
+th,td{text-align:left;padding:8px 11px;border-bottom:1px solid var(--border);vertical-align:top}
+th{color:var(--dim);font-weight:600;font-size:11.5px;text-transform:uppercase;letter-spacing:.5px;
+  background:var(--panel2);position:sticky;top:44px}
+tr:hover td{background:rgba(88,166,255,.045)}
+td.m,th.m{font-family:var(--mono);font-size:11.5px}
+td.m{color:#9fd0ff}
+.tblwrap{overflow-x:auto;border:1px solid var(--border);border-radius:10px;margin:14px 0}
+.tblwrap table{margin:0}
+.tblwrap th:first-child,.tblwrap td:first-child{padding-left:14px}
+
+/* ---------- flow nodes ---------- */
+.flow{display:flex;flex-direction:column;gap:0;margin:16px 0}
+.fnode{border:1.5px solid var(--border);border-left:5px solid var(--c,var(--border));border-radius:10px;
+  background:var(--panel);padding:13px 16px;position:relative;transition:.16s}
+.fnode:hover{border-color:var(--accent);transform:translateX(3px)}
+.fnode .fh{display:flex;align-items:center;gap:10px;font-weight:680;font-size:14.5px}
+.fnode .fh .badge{margin-left:auto;font-size:10px;font-weight:700;padding:2px 9px;border-radius:20px;
+  background:var(--c,var(--border));color:#0b0f16;white-space:nowrap}
+.fnode .fd{color:var(--dim);font-size:12.5px;margin-top:6px}
+.fnode .fp{font-family:var(--mono);font-size:11px;color:var(--accent);margin-top:6px;word-break:break-all}
+.fnode ul{margin:8px 0 0 18px;color:#c8d3e0;font-size:12.5px}
+.fnode li{margin:3px 0}
+.farrow{display:flex;align-items:center;justify-content:center;gap:8px;height:36px;position:relative;color:var(--dim2)}
+.farrow::before{content:"";position:absolute;top:0;bottom:0;left:50%;width:2px;background:var(--border)}
+.farrow span{position:relative;z-index:2;background:var(--bg);border:1px solid var(--border);border-radius:20px;
+  padding:2px 11px;font-family:var(--mono);font-size:10.5px;color:var(--accent)}
+.hbox{border:1px dashed var(--c,var(--border));border-radius:12px;padding:14px;margin:14px 0;
+  background:rgba(255,255,255,.015)}
+.hbox>.hl{font-size:11.5px;font-weight:700;color:var(--c,var(--dim));letter-spacing:.6px;
+  text-transform:uppercase;margin-bottom:11px;font-family:var(--mono)}
+.chips{display:flex;flex-wrap:wrap;gap:7px;margin-top:9px}
+.chip{font-family:var(--mono);font-size:10.5px;padding:3px 9px;border-radius:6px;
+  border:1px solid var(--border);background:var(--panel2);color:var(--dim)}
+.chip.hi{color:#0b0f16;background:var(--accent);border-color:var(--accent);font-weight:700}
+pre{background:#0a0e14;border:1px solid var(--border);border-radius:10px;padding:14px 16px;overflow-x:auto;
+  font-family:var(--mono);font-size:11.8px;line-height:1.62;color:#c9d6e4;margin:12px 0}
+pre .c{color:#5c6a7d}
+pre .k{color:#ff7b72}
+pre .s{color:#a5d6ff}
+pre .f{color:#d2a8ff}
+pre .n{color:#79c0ff}
+.legend{display:flex;gap:15px;flex-wrap:wrap;margin-top:15px;font-size:11.5px;color:var(--dim)}
+.legend span{display:inline-flex;align-items:center;gap:6px}
+.dot{width:11px;height:11px;border-radius:3px;display:inline-block}
+svg{max-width:100%;height:auto;display:block}
+.svgwrap{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:12px;margin:16px 0;overflow-x:auto}
+footer{max-width:1400px;margin:0 auto;padding:30px 34px;color:var(--dim2);font-size:12px}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>slime-terminal-RL 训练框架全景<span class="tag">run_tmax15k_122b_a10b_scalable_ppo_criticlr30x_strongest.sh</span></h1>
+  <p class="sub">
+    以 <b>Qwen3.5-122B-A10B (MoE)</b> 在 <b>tmax-15k 终端 Agent 任务</b>上做 <b>PPO</b> 的一次真实训练为主线（下文数字取 <code>TOPOLOGY=88cp2</code> 这一档，即脚本注释中标为「88-GPU 主力」的配置；<code>export TOPOLOGY="${TOPOLOGY:-72}"</code> 的默认档是 72，两者 RL 配方完全相同，只有并行度与显存余量不同），
+    自底向上拆解：shell 启动链 → Ray 资源编排 → Harbor Agent 在 Daytona 沙箱里跑轨迹 →
+    轨迹如何变成带 loss_mask 的 token 序列 → DP/micro-batch 调度 → Megatron 上的 critic/actor 双模型 PPO →
+    权重回灌 SGLang 推理引擎。图中每个环节都标注了对应的源码位置。
+  </p>
+  <div class="kv">
+    <code>TOPOLOGY=88cp2（脚本自称 88-GPU 主力；默认值其实是 72）</code><code>64 train + 24 infer GPU</code><code>TP2 × PP4 × CP2 ⇒ DP4, EP16</code>
+    <code>train_async.py</code><code>advantage_estimator=ppo</code><code>GLOBAL_BATCH_SIZE=256</code>
+    <code>n=1 (train) / pass@3 (eval)</code><code>SEQ_LENGTH=65536</code><code>critic lr 30× / actor lr 2×</code>
+  </div>
+  <div class="legend">
+    <span><i class="dot" style="background:var(--launch)"></i>Shell 启动层</span>
+    <span><i class="dot" style="background:var(--ray)"></i>Ray 编排</span>
+    <span><i class="dot" style="background:var(--rollout)"></i>Rollout / SGLang</span>
+    <span><i class="dot" style="background:var(--sandbox)"></i>Agent / 沙箱</span>
+    <span><i class="dot" style="background:var(--buffer)"></i>数据转换</span>
+    <span><i class="dot" style="background:var(--critic)"></i>Critic</span>
+    <span><i class="dot" style="background:var(--actor)"></i>Actor</span>
+    <span><i class="dot" style="background:var(--sync)"></i>权重同步</span>
+  </div>
+</header>
+
+<nav>
+  <a href="#s0">0 · 三句话总览</a>
+  <a href="#s1">1 · 启动链路</a>
+  <a href="#s2">2 · 集群全景图</a>
+  <a href="#s3">3 · slime 的作用</a>
+  <a href="#s4">4 · 数据流水线</a>
+  <a href="#s5">5 · 一个 step 的时序</a>
+  <a href="#s6">6 · PPO 训练方法</a>
+  <a href="#s7">7 · 与 Engine 的交互</a>
+  <a href="#s8">8 · 显存与失败模式</a>
+  <a href="#s9">9 · 源码索引</a>
+</nav>
+
+<main>
+
+<section id="s0">
+<h2><span class="num">0</span>三句话总览</h2>
+<div class="grid g3">
+  <div class="card" style="border-top:3px solid var(--rollout)">
+    <h3 style="margin-top:0">① 谁在产生数据</h3>
+    <p style="font-size:13px">
+      Harbor 的 <b>Terminus2 Agent</b> 拿到一个终端任务（<code>task.toml</code> + <code>instruction.md</code>），
+      在 <b>Daytona 云沙箱</b>里开一个真 shell，反复「想 → 敲命令 → 看输出」，最多 60 轮。
+      每一次「想」都是一次 HTTP 请求打到 <b>SGLang</b> 的 <code>/generate</code>。
+      跑完由 <b>terminal-bench verifier</b> 跑测试，得到 0/1 奖励。
+    </p>
+  </div>
+  <div class="card" style="border-top:3px solid var(--buffer)">
+    <h3 style="margin-top:0">② slime 在中间做什么</h3>
+    <p style="font-size:13px">
+      slime 是<b>胶水与调度器</b>：用 Ray 把 88 张卡切成「训练组」和「推理组」，
+      把 Agent 轨迹拼成带 <code>loss_mask</code> 的 token 序列，
+      按 <code>group_id</code> + 序列长度做 DP/micro-batch 装箱，
+      喂给 Megatron；训练完再把新权重 <b>NCCL 广播</b>回 SGLang。
+    </p>
+  </div>
+  <div class="card" style="border-top:3px solid var(--actor)">
+    <h3 style="margin-top:0">③ 怎么学</h3>
+    <p style="font-size:13px">
+      标准 <b>PPO</b>：一个和 actor 同规模的 <b>122B critic</b> 与 actor <em>共用同一批 GPU</em>（靠 offload 轮流上卡），
+      用 GAE(γ=1, λ=1) 把最后一个 token 上的稀疏奖励摊成 per-token advantage，
+      actor 用 ε=0.2 的 clipped policy loss。前 2 步<b>只训 critic</b>暖机。
+    </p>
+  </div>
+</div>
+<div class="note">
+  <b>为什么这套框架"看起来复杂"</b>：普通 RLHF 的 rollout 是「一次前向出一段文本」；
+  这里的一次 rollout 是「启动一个云容器、跑一个可能长达 90 分钟的多轮 Agent 会话、再跑一遍单元测试」。
+  于是所有复杂度都集中在三件事上：<b>(a)</b> 长尾并发（280 并发试验、取最快 256、砍掉慢尾）、
+  <b>(b)</b> 把多轮对话无损切成可训练 token 段（<code>trajectory_retokenized</code>）、
+  <b>(c)</b> 单条 33k~64k token 的样本不可切分带来的显存与 JIT 编译风暴。
+</div>
+</section>
+
+<section id="s1">
+<h2><span class="num">1</span>启动链路：从一行命令到 <code>train_async.py</code></h2>
+<p class="lead">
+  <code>run_tmax15k_...strongest.sh</code> 本身<b>不启动任何训练</b>。它是一个纯粹的「配方文件 + 前置校验器」：
+  设置约 100 个环境变量、按 <code>TOPOLOGY</code> 预设推导并行度、在花掉 GPU 之前把所有可除性约束验一遍，然后 exec 通用启动器。
+</p>
+
+<div class="flow">
+  <div class="fnode" style="--c:var(--launch)">
+    <div class="fh">① 配方脚本<span class="badge">shell</span></div>
+    <div class="fp">examples/harbor_terminal_rl/run_tmax15k_122b_a10b_scalable_ppo_criticlr30x_strongest.sh</div>
+    <ul>
+      <li><b>TOPOLOGY 预设</b>（L245-410）：一个 case 分支同时决定 <code>_ACTOR_NODES / _ROLLOUT_GPUS / _PP / _CP</code>
+          以及 batch、eval 间隔、<code>NUM_CRITIC_ONLY_STEPS</code>。<code>88cp2</code> ⇒ 8 actor 节点(64卡) + 3 rollout 节点(24卡)、PP4、CP2。</li>
+      <li><b>PPO 配方</b>（L502-516）：<code>ADVANTAGE_ESTIMATOR=ppo</code>、<code>EPS_CLIP=0.2</code>、KL 关、熵关、
+          <code>KEEP_OLD_ACTOR=1</code>、两个 token-cap 后处理 hook。</li>
+      <li><b>CP&gt;1 专用反长尾三件套</b>（L551-573）：<code>DATA_PAD_SIZE_MULTIPLIER=2048</code>（收敛 thd 形状数）、
+          <code>TRITON_CACHE_DIR</code>（节点本地持久化 JIT 缓存）、NCCL 组超时抬到 120 分钟。</li>
+      <li><b>前置校验</b>（L636-677）：TP×PP×CP 能否整除训练卡数、EP×ETP 能否整除 TP×CP×DP、48 层能否被 PP 整除、
+          <code>GLOBAL_BATCH_SIZE % DP == 0</code>、<code>import fla.ops.cp</code> 是否可用。任一不过秒级退出，而不是等 20 分钟初始化后才崩。</li>
+      <li><code>DRY_RUN=1</code> 打印解析后的计划并退出，不碰集群。</li>
+    </ul>
+  </div>
+
+  <div class="farrow"><span>exec（默认 nohup 后台）</span></div>
+
+  <div class="fnode" style="--c:var(--launch)">
+    <div class="fh">② 通用启动器<span class="badge">shell · 829 行</span></div>
+    <div class="fp">examples/harbor_terminal_rl/run_qwen35_9b_terminal_bench2_64h20.sh</div>
+    <ul>
+      <li><b>抬高 fd 上限</b>（L32-37）：320 路并发 Daytona 试验会打爆默认 1024 fd 限制，必须在 <code>ray start</code> 之前抬。</li>
+      <li><b>Ray 集群</b>：<code>RUN_ROLE=worker</code> 的节点循环重试 <code>ray start --address</code> 加入；
+          launcher 节点按 <code>USE_EXISTING_RAY_HEAD</code> 决定复用现有 head 还是新建，然后轮询 <code>ray status</code> 等齐 <code>EXPECTED_NODES</code>。</li>
+      <li><b>rollout 函数选择</b>（L334-343）：<code>HARBOR_ROLLOUT_MODE=standard</code> ⇒
+          <code>slime_plugins.harbor.rollout.generate_rollout</code>；<code>fully_async</code> ⇒ 另一个实现。</li>
+      <li><b>组装 8 组参数数组</b>：MODEL_ARGS（来自 <code>scripts/models/qwen3.5-122B-A10B.sh</code>）、CKPT_ARGS、
+          HARBOR_ROLLOUT_ARGS、OPTIMIZER_ARGS、GRPO_ARGS、PERF_ARGS、SGLANG_ARGS、MISC_ARGS。</li>
+      <li><b>提交</b>（L823-825）：<code>ray job submit --runtime-env-json=... -- python3 train_async.py &lt;所有 flag&gt;</code>。
+          <code>TRAIN_ENTRYPOINT</code> 默认就是 <code>train_async.py</code>（L787）——即<b>异步</b>训练循环。</li>
+    </ul>
+  </div>
+
+  <div class="farrow"><span>ray job submit</span></div>
+
+  <div class="fnode" style="--c:var(--ray)">
+    <div class="fh">③ 训练主循环<span class="badge">python · 123 行</span></div>
+    <div class="fp">train_async.py</div>
+    <ul>
+      <li><code>parse_args()</code> 合并三大参数族 → 创建 placement group → 起 RolloutManager（内含 SGLang 引擎）
+          → 建 actor + critic 两个 <code>RayTrainGroup</code> → 首次 <code>update_weights()</code> 把权重推给 SGLang。</li>
+      <li>核心异步性（L63-72）：<b>在训练当前 batch 之前，就已经把下一个 rollout 发出去了</b>。
+          <code>rollout_data_next_future = rollout_manager.generate.remote(rollout_id + 1)</code>。</li>
+      <li>断言 <code>not args.colocate</code>——异步模式要求训练卡与推理卡物理分离。</li>
+    </ul>
+  </div>
+</div>
+
+<h3>关键环境变量 → CLI flag 映射</h3>
+<div class="tblwrap">
+<table>
+<thead><tr><th>环境变量</th><th>CLI flag</th><th>本次取值</th><th>作用</th></tr></thead>
+<tbody>
+<tr><td class="m">HARBOR_ROLLOUT_MODE</td><td class="m">--rollout-function-path</td><td class="m">slime_plugins.harbor.rollout.generate_rollout</td><td>整个 rollout 生成器被 Harbor 插件替换</td></tr>
+<tr><td class="m">（固定）</td><td class="m">--data-source-path</td><td class="m">slime_plugins.harbor.data_source.HarborTaskDataSource</td><td>数据源换成「终端任务目录扫描器」</td></tr>
+<tr><td class="m">CONFIG</td><td class="m">--custom-config-path</td><td class="m">harbor_tmax15k_72gpu_..._cp2_bs256_evaltimeout10800.yaml</td><td>Agent/沙箱/并发/超时全部来自这个 YAML</td></tr>
+<tr><td class="m">MEGATRON_CONFIG_PATH</td><td class="m">--megatron-config-path</td><td class="m">megatron_roles_tmax15k_criticlr30x_actorlr2x.yaml</td><td>per-role 学习率覆盖（actor 1e-6 / critic 1.5e-5）</td></tr>
+<tr><td class="m">ADVANTAGE_ESTIMATOR</td><td class="m">--advantage-estimator</td><td class="m">ppo</td><td>触发 <code>use_critic=True</code> 与 <code>offload_train=True</code></td></tr>
+<tr><td class="m">NUM_CRITIC_ONLY_STEPS</td><td class="m">--num-critic-only-steps</td><td class="m">2</td><td>rollout 0、1 只训 critic；rollout 2 才是首个联合步</td></tr>
+<tr><td class="m">CP_SIZE</td><td class="m">--context-parallel-size</td><td class="m">2</td><td>GatedDeltaNet 原生 CP（fla.ops.cp），显存峰值减半</td></tr>
+<tr><td class="m">ROLLOUT_NUM_GPUS_PER_ENGINE</td><td class="m">--rollout-num-gpus-per-engine</td><td class="m">8</td><td>24 推理卡 ⇒ 3 个独立 TP8 引擎</td></tr>
+<tr><td class="m">SGLANG_MEM_FRACTION_STATIC</td><td class="m">--sglang-mem-fraction-static</td><td class="m">0.6</td><td>不是默认 0.75：给 FLA 长序列临时张量留空间（实测崩过）</td></tr>
+<tr><td class="m">MAX_TOKENS_PER_GPU</td><td class="m">--max-tokens-per-gpu</td><td class="m">8192</td><td>动态装箱每 bin 上限（但拦不住超大单样本）</td></tr>
+<tr><td class="m">HARBOR_MAX_TRAIN_TOTAL_TOKENS</td><td class="m">（env，插件读）</td><td class="m">65536</td><td>训练侧 token 硬顶，由两个 postprocess hook 执行裁剪</td></tr>
+<tr><td class="m">DAYTONA_API_KEY</td><td class="m">（env，透传进 runtime_env）</td><td class="m">从 /tmp/bs512_keys.env 读</td><td>云沙箱凭证，绝不写进 git 树</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>参数是怎么被合并的（三层覆盖）</h3>
+<pre><span class="c"># slime/utils/arguments.py</span>
+<span class="c">① CLI flag  ─────────────────────────────►  argparse namespace</span>
+<span class="c">   Megatron 原生 flag + 所有 SGLang flag（自动加 --sglang- 前缀）+ slime 自有 flag</span>
+
+<span class="c">② --custom-config-path YAML  ────────────►  直接 setattr 覆盖（L1914-1920）</span>
+   <span class="k">for</span> k, v <span class="k">in</span> yaml.safe_load(f).items():
+       setattr(args, k, v)          <span class="c"># harbor_* 全家桶从这里进来</span>
+
+<span class="c">③ PPO 强制派生（L1818-1821, 1862-1863）</span>
+   args.use_critic = (args.advantage_estimator == <span class="s">"ppo"</span>)
+   args.critic_num_gpus_per_node = args.actor_num_gpus_per_node   <span class="c"># critic 与 actor 同规模</span>
+   args.critic_num_nodes         = args.actor_num_nodes
+   <span class="k">if</span> args.use_critic: args.offload_train = <span class="n">True</span>              <span class="c"># ★ 强制 offload，见 §8</span>
+
+<span class="c">④ --megatron-config-path YAML  ──────────►  per-role deepcopy + 局部覆盖</span>
+   placement_group.py: parse_megatron_role_args(role=<span class="s">"actor"</span> / <span class="s">"critic"</span>)
+   <span class="c"># actor  lr 1.0e-6  (2×  canonical 5e-7)</span>
+   <span class="c"># critic lr 1.5e-5  (30× canonical 5e-7)  ← 只覆盖 lr / min_lr，其余全继承</span></pre>
+<div class="note">
+  <b>为什么 critic lr 要 30×</b>：cold-start critic 的 value head 是随机初始化的（<code>output_size=1</code>，
+  shape 不匹配时 <code>model.py:_reinitialize_critic_output_layer</code> 自动重init）。
+  一个没校准的 critic 会给出垃圾 advantage，所以要用极大的 lr 让 <code>explained_variance</code>
+  尽快从负值翻正，再叠加 <code>NUM_CRITIC_ONLY_STEPS=2</code> 的纯 critic 暖机。
+  YAML 注释里记录了历史：20× 时 EV 在 step30 首次转正（+0.11）。
+</div>
+</section>
+
+<section id="s2">
+<h2><span class="num">2</span>集群全景：88 张卡是怎么分的</h2>
+<p class="lead">
+  Ray 先申请一个横跨 11 个节点、88 个 GPU bundle 的 placement group，
+  然后按偏移把前 64 个 bundle 划给训练、后 24 个划给推理。
+  <b>critic 不占额外 GPU</b>——它直接复用 actor 的 placement group。
+</p>
+
+<div class="svgwrap">
+<svg viewBox="0 0 1240 620" xmlns="http://www.w3.org/2000/svg" font-family="ui-monospace,monospace">
+  <defs>
+    <marker id="ah" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+      <path d="M0,0 L9,4.5 L0,9 z" fill="#79c0ff"/>
+    </marker>
+    <marker id="ahp" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+      <path d="M0,0 L9,4.5 L0,9 z" fill="#ff7b72"/>
+    </marker>
+    <marker id="ahg" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+      <path d="M0,0 L9,4.5 L0,9 z" fill="#3fb950"/>
+    </marker>
+  </defs>
+
+  <!-- Ray head -->
+  <rect x="470" y="14" width="300" height="46" rx="9" fill="#1b2330" stroke="#f778ba" stroke-width="1.5"/>
+  <text x="620" y="34" fill="#f778ba" font-size="13" font-weight="700" text-anchor="middle">Ray Head (29.127.33.153:6379)</text>
+  <text x="620" y="50" fill="#8b98a9" font-size="10.5" text-anchor="middle">train_async.py 作为 driver 运行在这里</text>
+
+  <!-- ============ TRAIN SIDE ============ -->
+  <rect x="20" y="86" width="620" height="428" rx="12" fill="rgba(88,166,255,.05)" stroke="#58a6ff" stroke-width="1.5" stroke-dasharray="5 4"/>
+  <text x="34" y="108" fill="#58a6ff" font-size="12.5" font-weight="700">训练组 · pgs["actor"] · 8 节点 × 8 = 64 GPU</text>
+  <text x="34" y="124" fill="#8b98a9" font-size="10.5">TP2 × PP4 × CP2 ⇒ DP4 ｜ EP16 × ETP1 ｜ 12 layers/stage</text>
+
+  <!-- actor block -->
+  <rect x="36" y="136" width="588" height="118" rx="9" fill="#141a24" stroke="#58a6ff"/>
+  <text x="50" y="157" fill="#58a6ff" font-size="12" font-weight="700">ACTOR · Qwen3.5-122B-A10B · RayTrainGroup(role="actor")</text>
+  <text x="50" y="174" fill="#8b98a9" font-size="10">MegatronTrainRayActor × 64 ｜ lr 1.0e-6 ｜ policy_loss (custom, no-entropy-graph)</text>
+  <!-- pp stages -->
+  <g font-size="9.5" text-anchor="middle">
+    <rect x="52" y="186" width="132" height="52" rx="6" fill="#1b2330" stroke="#2c3746"/>
+    <text x="118" y="202" fill="#79c0ff" font-size="10.5" font-weight="700">PP stage 0</text>
+    <text x="118" y="217" fill="#8b98a9">layers 0-11</text>
+    <text x="118" y="231" fill="#6b7688">16 GPU (TP2×CP2×DP4)</text>
+
+    <rect x="192" y="186" width="132" height="52" rx="6" fill="#1b2330" stroke="#2c3746"/>
+    <text x="258" y="202" fill="#79c0ff" font-size="10.5" font-weight="700">PP stage 1</text>
+    <text x="258" y="217" fill="#8b98a9">layers 12-23</text>
+    <text x="258" y="231" fill="#6b7688">16 GPU</text>
+
+    <rect x="332" y="186" width="132" height="52" rx="6" fill="#1b2330" stroke="#2c3746"/>
+    <text x="398" y="202" fill="#79c0ff" font-size="10.5" font-weight="700">PP stage 2</text>
+    <text x="398" y="217" fill="#8b98a9">layers 24-35</text>
+    <text x="398" y="231" fill="#6b7688">16 GPU</text>
+
+    <rect x="472" y="186" width="136" height="52" rx="6" fill="#1b2330" stroke="#e3b341"/>
+    <text x="540" y="202" fill="#e3b341" font-size="10.5" font-weight="700">PP stage 3</text>
+    <text x="540" y="217" fill="#8b98a9">layers 36-47 + lm_head</text>
+    <text x="540" y="231" fill="#e3b341">fp32 logits ← 显存瓶颈</text>
+  </g>
+
+  <!-- offload arrows -->
+  <g>
+    <path d="M330,258 L330,286" stroke="#ff7b72" stroke-width="2" marker-end="url(#ahp)"/>
+    <path d="M240,286 L240,258" stroke="#ff7b72" stroke-width="2" marker-end="url(#ahp)"/>
+    <text x="345" y="277" fill="#ff7b72" font-size="10">sleep() ↓ / wake_up() ↑ · torch_memory_saver</text>
+  </g>
+
+  <!-- critic block -->
+  <rect x="36" y="290" width="588" height="106" rx="9" fill="#141a24" stroke="#a371f7"/>
+  <text x="50" y="311" fill="#a371f7" font-size="12" font-weight="700">CRITIC · 同样是完整 122B 模型 · RayTrainGroup(role="critic")</text>
+  <text x="50" y="328" fill="#8b98a9" font-size="10">lr 1.5e-5 (30×) ｜ value head output_size=1，冷启动随机初始化 ｜ value_loss (clip 0.2)</text>
+  <rect x="52" y="338" width="556" height="44" rx="6" fill="rgba(163,113,247,.09)" stroke="#a371f7" stroke-dasharray="4 3"/>
+  <text x="330" y="356" fill="#c9a7ff" font-size="10.5" text-anchor="middle" font-weight="700">
+    placement_group.py:135 → result["critic"] = result["actor"]
+  </text>
+  <text x="330" y="372" fill="#8b98a9" font-size="10" text-anchor="middle">
+    完全相同的 64 张卡、相同的 TP/PP/CP/EP 布局 —— 不额外占卡，靠 offload 与 actor 轮流上显存
+  </text>
+
+  <text x="36" y="424" fill="#e3b341" font-size="10.5">⚠ 每张"训练卡"逻辑上承载两个 122B 模型 ⇒ arguments.py 强制 offload_train=True，二者交替驻留</text>
+  <rect x="36" y="434" width="588" height="66" rx="9" fill="#141a24" stroke="#2c3746"/>
+  <text x="50" y="453" fill="#8b98a9" font-size="10.5" font-weight="700">同时驻留在训练侧的其他权重副本（TensorBackuper 管理）</text>
+  <text x="50" y="470" fill="#6b7688" font-size="10">• old_actor（KEEP_OLD_ACTOR=1）：PPO ratio 的分母来源，训练前快照</text>
+  <text x="50" y="486" fill="#6b7688" font-size="10">• ref / teacher：本次未启用（USE_KL_LOSS=0，无蒸馏）⇒ 不加载，省一份显存</text>
+
+  <!-- ============ ROLLOUT SIDE ============ -->
+  <rect x="660" y="86" width="560" height="284" rx="12" fill="rgba(63,185,80,.05)" stroke="#3fb950" stroke-width="1.5" stroke-dasharray="5 4"/>
+  <text x="674" y="108" fill="#3fb950" font-size="12.5" font-weight="700">推理组 · pgs["rollout"] · 3 节点 × 8 = 24 GPU</text>
+  <text x="674" y="124" fill="#8b98a9" font-size="10.5">3 个彼此独立的 SGLang 引擎，每个 TP8，无 dp-attention / 无 EP</text>
+
+  <rect x="676" y="136" width="528" height="40" rx="8" fill="#1b2330" stroke="#f778ba"/>
+  <text x="940" y="153" fill="#f778ba" font-size="11.5" font-weight="700" text-anchor="middle">SGLang Router（独立进程，round-robin / consistent-hashing）</text>
+  <text x="940" y="168" fill="#8b98a9" font-size="10" text-anchor="middle">http://{sglang_router_ip}:{sglang_router_port}  ← Agent 的唯一入口</text>
+
+  <g text-anchor="middle">
+    <rect x="676" y="196" width="168" height="80" rx="8" fill="#141a24" stroke="#3fb950"/>
+    <text x="760" y="215" fill="#3fb950" font-size="11" font-weight="700">Engine 0 · TP8</text>
+    <text x="760" y="232" fill="#8b98a9" font-size="9.5">RolloutRayActor</text>
+    <text x="760" y="246" fill="#8b98a9" font-size="9.5">ctx 86016 tok</text>
+    <text x="760" y="262" fill="#e3b341" font-size="9.5">mem_frac_static 0.6</text>
+
+    <rect x="856" y="196" width="168" height="80" rx="8" fill="#141a24" stroke="#3fb950"/>
+    <text x="940" y="215" fill="#3fb950" font-size="11" font-weight="700">Engine 1 · TP8</text>
+    <text x="940" y="232" fill="#8b98a9" font-size="9.5">RolloutRayActor</text>
+    <text x="940" y="246" fill="#8b98a9" font-size="9.5">ctx 86016 tok</text>
+    <text x="940" y="262" fill="#8b98a9" font-size="9.5">chunked prefill 8192</text>
+
+    <rect x="1036" y="196" width="168" height="80" rx="8" fill="#141a24" stroke="#3fb950"/>
+    <text x="1120" y="215" fill="#3fb950" font-size="11" font-weight="700">Engine 2 · TP8</text>
+    <text x="1120" y="232" fill="#8b98a9" font-size="9.5">RolloutRayActor</text>
+    <text x="1120" y="246" fill="#8b98a9" font-size="9.5">ctx 86016 tok</text>
+    <text x="1120" y="262" fill="#8b98a9" font-size="9.5">mamba: extra_buffer</text>
+  </g>
+  <text x="676" y="298" fill="#8b98a9" font-size="10.5" font-weight="700">RolloutManager（Ray actor，slime/ray/rollout.py）</text>
+  <text x="676" y="315" fill="#6b7688" font-size="10">持有 ServerGroup + Router + DataSource + rollout_engine_lock；generate()/eval() 的调度入口</text>
+  <text x="676" y="333" fill="#56d4dd" font-size="10.5" font-weight="700">+ TrialWorker × 3（每个 rollout 节点一个，num_gpus=0）</text>
+  <text x="676" y="349" fill="#6b7688" font-size="10">harbor_trial_node_spread=true ⇒ 把 Agent 的 asyncio/httpx 负载摊到 3 个节点，各限 35 路</text>
+
+  <!-- external -->
+  <rect x="660" y="392" width="560" height="122" rx="12" fill="rgba(86,212,221,.05)" stroke="#56d4dd" stroke-width="1.5" stroke-dasharray="5 4"/>
+  <text x="674" y="414" fill="#56d4dd" font-size="12.5" font-weight="700">集群外部 · Daytona 云沙箱（每个试验一个容器）</text>
+  <text x="674" y="434" fill="#8b98a9" font-size="10.5">280 并发上限 ｜ 创建限速 6/s（组织级 600/min）｜ 1 CPU / 2 GB RAM / 10 GB 盘</text>
+  <text x="674" y="452" fill="#8b98a9" font-size="10.5">auto_stop 90 min ｜ auto_delete 10 min ｜ delete=true（跑完即销毁）</text>
+  <text x="674" y="472" fill="#6b7688" font-size="10">容器内运行：真实 bash 会话 + 任务代码 + tests/ 单元测试（verifier，900 s 上限）</text>
+  <text x="674" y="490" fill="#6b7688" font-size="10">备选后端：Singularity/Apptainer（slime_plugins/harbor/singularity_env.py，本次未用）</text>
+  <text x="674" y="507" fill="#8b98a9" font-size="10">共 88 GPU / 11 节点；GPU 只跑「模型」，「环境」全在 CPU 沙箱里</text>
+
+  <!-- flows between -->
+  <g>
+    <path d="M676,180 C650,180 646,258 624,258" stroke="#ff7b72" stroke-width="2.5" fill="none" marker-end="url(#ahp)"/>
+    <text x="628" y="150" fill="#ff7b72" font-size="10" text-anchor="end">权重同步</text>
+    <text x="628" y="164" fill="#ff7b72" font-size="9.5" text-anchor="end">NCCL broadcast</text>
+  </g>
+  <g>
+    <path d="M938,370 L938,392" stroke="#56d4dd" stroke-width="2" marker-end="url(#ahg)"/>
+    <text x="1000" y="384" fill="#56d4dd" font-size="9.5">HTTP /generate ⇅</text>
+  </g>
+</svg>
+</div>
+
+<div class="grid g3">
+  <div class="card tight">
+    <b style="color:var(--actor)">为什么 TP 固定 2</b>
+    <p style="font-size:12.5px;color:var(--dim)">
+      GatedDeltaNet 用的是<b>普通 nn.Linear</b>（<code>slime_plugins/models/qwen3_5.py</code>，没有 Column/RowParallel），
+      而 <code>hf_attention.py</code> 在调用它之前会把序列 <em>all-gather 回全长</em>。
+      所以 TP&gt;2 时那 2.94B GDN 参数在每个 TP rank 上<b>完全复制</b>，激活峰值也不缩小。
+      加上 <code>num_query_groups=2 &lt; TP</code> 会触发 KV 复制分支。⇒ 只能靠 PP 扛。
+    </p>
+  </div>
+  <div class="card tight">
+    <b style="color:var(--critic)">为什么调 EP 没用</b>
+    <p style="font-size:12.5px;color:var(--dim)">
+      专家参数占 116.0B / 121.4B（95.5%）。per-rank 专家参数按 1/(EP×ETP) 缩小，
+      但分布式优化器的分片因子 <code>EDP = TP×CP×DP/(EP×ETP)</code> 同比例变化，两者<b>精确抵消</b>：
+      <code>专家优化器字节/卡 = P_expert × 12 / 训练总卡数</code>。
+      ⇒ 只有<b>加训练卡</b>能降；<b>降 EP 反而有害</b>（权重+梯度翻倍而优化器不变）。
+    </p>
+  </div>
+  <div class="card tight">
+    <b style="color:var(--sandbox)">为什么 CP=2 值得 DP 减半</b>
+    <p style="font-size:12.5px;color:var(--dim)">
+      GDN 激活实测约 330 KiB/token，是真正会 OOM 的项。CP=2 把它砍半（10.57→5.34 GB @ T=33792），
+      且 <code>tests/test_qwen3_5_gdn_cp_*.py</code> 验证前向<b>逐位一致</b>、梯度最大差 1.2e-7。
+      代价：DP 8→4，bs256 下每 rank 64 个梯度累积 micro-batch，step 时间约 4×。
+      脚本注释里写得很直白：<em>correctness over speed</em>。
+    </p>
+  </div>
+</div>
+</section>
+
+<section id="s3">
+<h2><span class="num">3</span>slime 在这里到底做了什么</h2>
+<p class="lead">
+  slime 的定位是：<b>把 Megatron（训练）和 SGLang（推理）用 Ray 缝在一起，中间夹一层 Data Buffer</b>。
+  它自己不写模型、不写推理内核，只负责「资源编排 + 数据搬运 + 调度对齐 + 权重回灌」这四件事。
+  Harbor 这套终端 Agent 训练<b>没有改 slime 核心一行</b>，全部通过 <code>--*-path</code> 插件钩子挂进去。
+</p>
+
+<div class="grid g2">
+<div class="card">
+  <h3 style="margin-top:0">slime 核心负责的四件事</h3>
+  <table>
+    <tr><td><b style="color:var(--ray)">① 资源编排</b></td>
+        <td>一个 placement group 覆盖全部 88 卡，按偏移切分 actor/rollout；critic 复用 actor 的 bundle；
+            每个 rollout 节点额外拉起一个 0-GPU 的 TrialWorker。<a class="src" href="#">slime/ray/placement_group.py</a></td></tr>
+    <tr><td><b style="color:var(--buffer)">② 数据搬运</b></td>
+        <td><code>Sample</code> 列表 → 训练用的扁平 dict（tokens / loss_masks / rewards / group_ids …）
+            → 按 DP rank 切分 → <code>ray.put()</code> 成 4 个 Box。<a class="src" href="#">slime/ray/rollout.py:930-1100</a></td></tr>
+    <tr><td><b style="color:var(--actor)">③ 调度对齐</b></td>
+        <td>按 <code>group_id</code> 分组不打散、first-fit 装箱、micro-batch 数补齐到 DP 的倍数、
+            Karmarkar-Karp 均衡各 rank token 数——保证 PP 不失步。<a class="src" href="#">slime/utils/dp_schedule.py</a></td></tr>
+    <tr><td><b style="color:var(--sync)">④ 权重回灌</b></td>
+        <td>non-expert(TP) 与 expert(EP) 分两趟 all-gather、转 HF 命名、按 buffer 大小分桶、
+            NCCL 广播给引擎。<a class="src" href="#">update_weight_from_distributed.py</a></td></tr>
+  </table>
+</div>
+<div class="card">
+  <h3 style="margin-top:0">Harbor 通过哪些钩子接入</h3>
+  <table>
+    <tr><td class="m">--rollout-function-path</td><td>整个 rollout 生成器 → <code>harbor.rollout.generate_rollout</code></td></tr>
+    <tr><td class="m">--data-source-path</td><td>数据源 → <code>HarborTaskDataSource</code>（扫 task.toml 目录）</td></tr>
+    <tr><td class="m">--eval-function-path</td><td>eval 也走 Harbor（内部走 <code>_generate_eval_async</code> 分支）</td></tr>
+    <tr><td class="m">--rollout-all-samples-process-path</td><td>token cap（sample 级）：<code>cap_total_tokens_allow_response_trim_in_samples</code></td></tr>
+    <tr><td class="m">--rollout-data-postprocess-path</td><td>token cap（rollout_data 级兜底，训练侧执行）</td></tr>
+    <tr><td class="m">--loss-type custom_loss<br>--custom-loss-function-path</td><td><code>harbor.train_loss.policy_loss_no_entropy_when_disabled</code>：
+        entropy_coef=0 时跳过带梯度的熵图构建，但仍以 no_grad 记录熵作健康指标</td></tr>
+    <tr><td class="m">rollout_cleanup_function_path</td><td>异常/退出时清理泄漏的沙箱</td></tr>
+  </table>
+  <div class="chips">
+    <span class="chip hi">slime 核心零修改</span>
+    <span class="chip">插件目标模块文件名不能含点（importlib 解析限制）</span>
+  </div>
+</div>
+</div>
+
+<h3>Data Buffer 到底是什么</h3>
+<p>
+  slime 文档里说的"Data Buffer"不是一个消息队列，而是 <code>DataSource</code> 这一层抽象 +
+  <b>Ray object store</b>。数据的物理落点只有两处：
+</p>
+<pre><span class="c"># ① 任务侧（prompt 侧）：HarborTaskDataSource 持有游标</span>
+  entries[]        <span class="c"># 14601 个 task.toml 条目，启动时扫描一次</span>
+  sample_offset    <span class="c"># 训练游标，取模循环 ⇒ 天然的 epoch 概念</span>
+  eval_* 游标      <span class="c"># 独立的 eval 池（89 个 TB2 任务），绝不与训练游标混用</span>
+  requeued_groups  <span class="c"># deque：被丢弃/失败的组可以回灌重试</span>
+
+<span class="c"># ② 训练侧（trajectory 侧）：Ray object store</span>
+  rollout_data_refs = [Box(ray.put(per_rank_dict)) <span class="k">for</span> r <span class="k">in</span> range(dp_size)]
+  <span class="c">#  ↑ RolloutManager 在自己进程里 put 好，只把 4 个 ObjectRef 交给 driver</span>
+  <span class="c">#  ↑ 64 个训练 actor 里，只有各自 DP rank 对应的那一个会去 ray.get()</span>
+  <span class="c">#    ⇒ 大张量不经过 driver，也不走 NCCL；纯 Ray 共享内存</span></pre>
+<div class="ok">
+  <b>关键设计</b>：轨迹数据用 <b>Ray object store</b>（CPU 共享内存）传，权重用 <b>NCCL</b>（GPU 直连）传。
+  前者数据量小（token id）但结构复杂、后者数据量巨大（122B × 2 bytes）但结构规整。分工非常清晰。
+</div>
+</section>
+
+<section id="s4">
+<h2><span class="num">4</span>数据流水线：从 task.toml 到可训练 token</h2>
+<p class="lead">这是整个框架最有信息量的一段。一个终端任务经过 7 个阶段才变成 Megatron 能吃的东西。</p>
+
+<div class="flow">
+  <div class="fnode" style="--c:var(--buffer)">
+    <div class="fh">① 任务池<span class="badge">14601 tasks</span></div>
+    <div class="fp">/path/to/shared_storage/.../slime-terminal-RL_data/tmax15k_terminal_bench/task_XXXXXX_&lt;hash&gt;/</div>
+    <p style="font-size:12.5px;color:var(--dim);margin-top:7px">每个任务目录包含 4 个部分：</p>
+    <ul>
+      <li><code>task.toml</code> — 元数据 + 超时/资源配额（verifier 900 s、agent 3600 s、1 CPU / 2 GB / 10 GB、允许联网）</li>
+      <li><code>instruction.md</code> — 给 Agent 的自然语言任务书（真实样本：用 tesseract OCR 读图拿到偏移量 → 对 200 个 commit 做 git bisect 找出并发 bug → 修 mutex 与 Makefile → 编译到指定路径，最后要和参考实现<b>逐位一致</b>）</li>
+      <li><code>environment/Dockerfile</code> + <code>files/</code> — 沙箱镜像与初始文件</li>
+      <li><code>tests/test.sh</code> + <code>test_outputs.py</code> + <code>test_weights.json</code> — verifier 的评分依据</li>
+    </ul>
+    <div class="chips">
+      <span class="chip">domain: debugging / file_operations / security / data_querying …</span>
+      <span class="chip">eval 池另有 89 个 Terminal-Bench 2 任务，完全held-out</span>
+    </div>
+  </div>
+
+  <div class="farrow"><span>data_source.get_samples(n) → list[list[Sample]]</span></div>
+
+  <div class="fnode" style="--c:var(--rollout)">
+    <div class="fh">② 过采样调度<span class="badge">280 并发 → 取 256</span></div>
+    <div class="fp">slime_plugins/harbor/rollout.py :: _generate_rollout_async (L150-363)</div>
+    <ul>
+      <li>一次性提交 <code>OVER_SAMPLING_BATCH_SIZE=280</code> 个组，<code>asyncio.Semaphore(280)</code> 控并发。</li>
+      <li><code>asyncio.wait(..., FIRST_COMPLETED)</code> 边完成边收；<b>攒满 256 个组就把剩下的慢尾直接 cancel</b>。</li>
+      <li>失败的组会 backfill 新任务补位；<code>harbor_rollout_group_attempt_multiplier=12</code> 限制总尝试次数。</li>
+      <li>创建限速：token bucket 6/s（Daytona 组织级上限 600/min）。</li>
+      <li>本次 <code>n_samples_per_prompt=1</code> ⇒ 1 组 = 1 任务 = 1 沙箱 = 1 条轨迹。</li>
+    </ul>
+    <div class="note" style="margin:10px 0 0">
+      <b>为什么必须过采样 + 砍尾</b>：单条试验的 wall 是 90 分钟（<code>harbor_trial_remote_timeout_sec=5400</code>），
+      而终端任务的耗时分布极度长尾。如果等最慢的那一个，一个 step 就没了。
+      砍尾的代价是 batch 有偏（偏向快任务），这是明确接受的 trade-off。
+    </div>
+  </div>
+
+  <div class="farrow"><span>_run_one_group → TrialWorker.run_trial.remote()</span></div>
+
+  <div class="fnode" style="--c:var(--sandbox)">
+    <div class="fh">③ Agent 在沙箱里跑<span class="badge">最多 60 轮</span></div>
+    <div class="fp">slime_plugins/harbor/agent.py :: SlimeTerminus2（继承 harbor.agents.terminus_2.Terminus2）</div>
+    <ul>
+      <li><code>Trial.create(config)</code> → 起 Daytona 容器、装好任务文件；<code>trial.run()</code> 进入 Agent 主循环。</li>
+      <li>每一轮：拼 message history → <b>HTTP POST 到 SGLang router</b> → 解析出 shell 命令（<code>parser_name: json</code>）
+          → 在容器里执行 → 把 stdout/stderr 作为新观测拼回 history。</li>
+      <li><b>上下文管理</b>：<code>enable_summarize: true</code>，超过 <code>proactive_summarization_threshold=20000</code> token
+          主动摘要；<code>max_context_tokens=128000</code> 时抛 <code>ContextLengthExceededError</code> 触发摘要重试而不是丢整条轨迹。</li>
+      <li><code>enable_thinking: false</code> — 非思考模式；<code>collect_rollout_details: true</code> — 逐轮记录 token id 与 logprob。</li>
+    </ul>
+    <pre style="margin:10px 0 0"><span class="c"># slime_plugins/harbor/llm.py:118-128 —— 注意不是 OpenAI /v1/chat/completions</span>
+payload = {
+    <span class="s">"input_ids"</span>: prompt_token_ids,        <span class="c"># ★ 直接传 token id，不传文本</span>
+    <span class="s">"sampling_params"</span>: {temperature, top_p, top_k, max_new_tokens, stop_token_ids, …},
+    <span class="s">"return_logprob"</span>: <span class="n">True</span>,               <span class="c"># ★ 拿回 per-token logprob</span>
+}
+<span class="k">await</span> client.post(<span class="s">f"{router_url}/generate"</span>, json=payload)
+<span class="c"># 回来的 meta_info["output_token_logprobs"] 同时给出 completion token id 和 logprob</span></pre>
+    <div class="ok" style="margin:10px 0 0">
+      <b>为什么走 token id 而不是文本</b>：训练侧要的是<b>精确的 token 边界</b>。如果传文本再让服务端 tokenize，
+      prompt 的 token 化结果可能和训练侧不一致，loss_mask 就会错位。
+      直接用 <code>input_ids</code> + 拿回 <code>output_token_logprobs</code>，让 rollout 与 train 看到<b>同一串 id</b>。
+    </div>
+  </div>
+
+  <div class="farrow"><span>trial.run() 返回 verifier_result / agent_result</span></div>
+
+  <div class="fnode" style="--c:var(--sandbox)">
+    <div class="fh">④ 评测打分<span class="badge">terminal-bench verifier</span></div>
+    <div class="fp">容器内跑 tests/test.sh → CTRF 报告 → slime_plugins/harbor/atif_adapter.py::extract_reward</div>
+    <ul>
+      <li>主奖励：<code>verifier_result["rewards"]["reward"]</code>，本质是<b>二值 0/1</b>（测试全过才 1）。</li>
+      <li>状态：有 <code>exception_info</code> 且含 Timeout ⇒ <code>TRUNCATED</code>；其他异常 ⇒ <code>FAILED</code>；否则 <code>COMPLETED</code>。</li>
+      <li>可选的部分奖励（<code>partial_reward.py</code>）：读 <code>verifier/ctrf.json</code> 的 <code>passed/total</code>，
+          取 <code>max(terminal_reward, 0.4 × progress)</code>——缓解 0/1 奖励太稀疏。
+          <b>本次未启用</b>（<code>CUSTOM_REWARD_POST_PROCESS_PATH</code> 为空）。</li>
+      <li>长度奖励 <code>HARBOR_LENGTH_REWARD_LAMBDA=0.0</code> ⇒ 关闭。</li>
+    </ul>
+  </div>
+
+  <div class="farrow"><span>samples_from_trial_result(mode=trajectory_retokenized)</span></div>
+
+  <div class="fnode" style="--c:var(--buffer)">
+    <div class="fh">⑤ 轨迹 → Sample（本流程最微妙的一步）<span class="badge">atif_adapter.py</span></div>
+    <div class="fp">_normalized_trajectory_samples_from_detail (L731-962)</div>
+    <p style="font-size:12.5px;color:var(--dim);margin-top:7px">
+      难点：Agent 的第 k+1 轮 prompt <b>并不总是</b>第 k 轮 (prompt+output) 的严格前缀扩展——
+      摘要、history 截断、模板差异都会让它"漂移"。若强行当成一条连续序列，loss_mask 就会对错位置。
+      于是 <code>trajectory_retokenized</code> 模式逐对相邻轮次判定<b>衔接策略</b>：
+    </p>
+    <div class="tblwrap" style="margin:10px 0">
+    <table>
+      <thead><tr><th>策略</th><th>含义</th><th>处理</th></tr></thead>
+      <tbody>
+      <tr><td class="m">strict_prefix</td><td>下一轮 prompt = 本轮 prompt+output + 新增尾巴</td><td>尾巴作为「环境观测」拼进同一 chunk，loss_mask=0</td></tr>
+      <tr><td class="m">normalized_prefix</td><td>存在可容忍的前后缀漂移</td><td>规范化后对齐，仍并入同一 chunk</td></tr>
+      <tr><td class="m">retokenized_prefix</td><td>助手文本重新 tokenize 后能对上</td><td>用重 tokenize 的结果回放，保持 id 一致</td></tr>
+      <tr><td class="m">split</td><td>彻底对不上（例如刚做过摘要）</td><td><b>切断，开一个新 chunk</b></td></tr>
+      </tbody>
+    </table>
+    </div>
+    <p style="font-size:12.5px;color:#c8d3e0">
+      结果：一条轨迹产出 <b>1..N 个 Sample（chunk）</b>，每个 chunk 内：
+      <code>tokens = prompt_ids + response_ids</code>，
+      <code>loss_mask[i] = 1</code> 仅当该 token 是<b>模型自己吐的</b>，
+      环境回显的 stdout/stderr 一律 <code>0</code>。
+      同一轨迹的所有 chunk <b>共享一个 group_id</b>：
+      <code>rollout_id×1e12 + group_index×1e8 + sample_rank×1e4 + detail_index</code>。
+    </p>
+    <div class="warn" style="margin:10px 0 0">
+      <b>group_id 为什么至关重要</b>：它是 slime 唯一的「同一条轨迹」标识。DP 切分保证同组不跨 step；
+      <code>group_mask_sums</code> 用整组的 mask 总数作 loss 分母，
+      于是即使 first-fit 把一个组的 chunk 拆到不同 micro-batch，各 micro-batch 的部分贡献相加后
+      仍然等于「每组一个 token 加权均值」。这是长轨迹训练里最容易算错的地方。
+    </div>
+  </div>
+
+  <div class="farrow"><span>_apply_rollout_sample_hooks → token cap</span></div>
+
+  <div class="fnode" style="--c:var(--buffer)">
+    <div class="fh">⑥ Token 上限裁剪<span class="badge">65536 硬顶</span></div>
+    <div class="fp">slime_plugins/harbor/sample_postprocess.py</div>
+    <ul>
+      <li><code>cap_total_tokens_allow_response_trim_in_samples</code>（sample 级，rollout 进程执行）</li>
+      <li><code>cap_total_tokens_allow_response_trim_in_rollout_data</code>（rollout_data 级，训练进程再兜一次）</li>
+      <li>裁剪顺序：先丢最老的 prompt，不够再丢<b>最老的 response</b>（<code>_hard_trim_plan</code>），
+          并同步切 <code>loss_mask</code> / <code>rollout_log_probs</code>，至少保留 1 个上下文 token。</li>
+      <li>裁剪量记进 metadata，作为 <code>harbor/train_context_trimmed_*</code> 指标上报。</li>
+    </ul>
+  </div>
+
+  <div class="farrow"><span>RolloutFnTrainOutput(samples=list[list[Sample]]) 返回 RolloutManager</span></div>
+
+  <div class="fnode" style="--c:var(--ray)">
+    <div class="fh">⑦ 转训练格式 + DP 切分<span class="badge">slime 核心</span></div>
+    <div class="fp">slime/ray/rollout.py :: _convert_samples_to_train_data (L930) → _split_train_data_by_dp (L1043)</div>
+<pre style="margin:9px 0"><span class="c"># 扁平 dict（每个 key 一个 list，长度 = 样本数）</span>
+train_data = {
+  <span class="s">"tokens"</span>: [[int]],          <span class="s">"response_lengths"</span>: [int],
+  <span class="s">"rewards"</span>: [float],         <span class="s">"raw_reward"</span>: [float],
+  <span class="s">"loss_masks"</span>: [[0/1]],       <span class="s">"group_ids"</span>: [int],
+  <span class="s">"group_mask_sums"</span>: [int],    <span class="c"># ★ 整组 mask 总数（loss 分母）</span>
+  <span class="s">"truncated"</span>: [0/1],         <span class="s">"rollout_log_probs"</span>: [[float]],
+  <span class="s">"total_lengths"</span>: [int],
+}
+<span class="c"># 注意：advantage_estimator=ppo ⇒ _post_process_rewards 不做任何 group norm</span>
+<span class="c">#      （那是 grpo/gspo 的分支），rewards 原样透传，交给 GAE 处理。</span>
+
+<span class="c"># 然后 build_dp_schedule() 算出调度，每个 DP rank 打包一个 Box</span>
+rollout_data_refs = [Box(ray.put({
+   <span class="s">"partition"</span>: [...],            <span class="c"># 该 rank 负责的全局样本下标</span>
+   <span class="s">"tokens"</span>/<span class="s">"loss_masks"</span>/...,      <span class="c"># 已按 partition 切好</span>
+   <span class="s">"num_microbatches"</span>: [...],     <span class="s">"micro_batch_indices"</span>: [...],
+   <span class="s">"global_batch_sizes"</span>: [...],   <span class="c"># 每 step 的实际组数（动态 batch 允许最后一步偏短）</span>
+})) <span class="k">for</span> r <span class="k">in</span> range(4)]   <span class="c"># DP4 ⇒ 4 个 Box</span></pre>
+  </div>
+</div>
+
+<h3>DP / micro-batch 调度的四步（<code>slime/utils/dp_schedule.py:169-310</code>）</h3>
+<div class="grid g4">
+  <div class="card tight"><b style="color:var(--accent)">1. 按组切 step</b>
+    <p style="font-size:12px;color:var(--dim)">以 <code>group_id</code> 为单位切成每 <code>global_batch_size=256</code> 组一个 step，
+    <b>同组样本永不跨 step</b>。断言每 step 样本数 ≥ dp_size。</p></div>
+  <div class="card tight"><b style="color:var(--accent)">2. first-fit 装箱</b>
+    <p style="font-size:12px;color:var(--dim)"><code>first_fit_pack(lengths, max_per_bin = 8192 × CP)</code>。
+    <b>超大样本独占一个 bin</b>，bin 和等于它自身长度——这正是 <code>--max-tokens-per-gpu</code> 拦不住 OOM 的原因。</p></div>
+  <div class="card tight"><b style="color:var(--accent)">3. 补齐到 DP 倍数</b>
+    <p style="font-size:12px;color:var(--dim)">micro-batch 数必须是 <code>dp_size × mb_group</code> 的整数倍，否则 PP 会失步。
+    动态模式用 <code>expand_bins_by_splitting</code>（LPT）拆最大的多样本 bin 来凑数。</p></div>
+  <div class="card tight"><b style="color:var(--accent)">4. KK 均衡分配</b>
+    <p style="font-size:12px;color:var(--dim)"><code>balance_data</code> 开启 ⇒ 用 Karmarkar-Karp 按 bin 的 token 总和分配给 4 个 rank
+    （<code>equal_size=True</code>，各 rank micro-batch 数相同）。目标是压掉 straggler。</p></div>
+</div>
+<div class="warn">
+  <b>DP 越小，长尾越危险</b>：KK 分区在 DP=1 时退化成单分区，无法把长样本"均衡掉"——
+  这正是 <code>88cp8-128k</code> 预设（DP1）被标注为「慎用」的原因，也是 2026-08-11 那次
+  NCCL watchdog 击杀的 straggler 机制之一。
+</div>
+</section>
+
+<section id="s5">
+<h2><span class="num">5</span>一个训练 step 的完整时序</h2>
+<p class="lead">
+  这张图是全篇的骨架：横轴是时间，纵轴是参与者。注意 <code>train_async.py</code> 的关键特征——
+  <b>rollout N+1 的生成与 rollout N 的训练在时间上重叠</b>。
+</p>
+
+<div class="svgwrap">
+<svg viewBox="0 0 1300 700" xmlns="http://www.w3.org/2000/svg" font-family="ui-monospace,monospace">
+  <defs>
+    <marker id="a1" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#79c0ff"/></marker>
+    <marker id="a2" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#3fb950"/></marker>
+    <marker id="a3" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#ff7b72"/></marker>
+    <marker id="a4" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#a371f7"/></marker>
+  </defs>
+
+  <!-- lanes -->
+  <g font-size="11" font-weight="700">
+    <rect x="0" y="34"  width="188" height="52" rx="7" fill="#1b2330" stroke="#f778ba"/>
+    <text x="12" y="55" fill="#f778ba">driver</text><text x="12" y="72" fill="#8b98a9" font-size="9.5" font-weight="400">train_async.py</text>
+
+    <rect x="0" y="94"  width="188" height="52" rx="7" fill="#1b2330" stroke="#3fb950"/>
+    <text x="12" y="115" fill="#3fb950">RolloutManager</text><text x="12" y="132" fill="#8b98a9" font-size="9.5" font-weight="400">+ Harbor rollout</text>
+
+    <rect x="0" y="154" width="188" height="52" rx="7" fill="#1b2330" stroke="#56d4dd"/>
+    <text x="12" y="175" fill="#56d4dd">Daytona 沙箱</text><text x="12" y="192" fill="#8b98a9" font-size="9.5" font-weight="400">280 并发容器</text>
+
+    <rect x="0" y="214" width="188" height="52" rx="7" fill="#1b2330" stroke="#3fb950"/>
+    <text x="12" y="235" fill="#3fb950">SGLang × 3</text><text x="12" y="252" fill="#8b98a9" font-size="9.5" font-weight="400">24 GPU (TP8)</text>
+
+    <rect x="0" y="274" width="188" height="52" rx="7" fill="#1b2330" stroke="#d29922"/>
+    <text x="12" y="295" fill="#d29922">Ray object store</text><text x="12" y="312" fill="#8b98a9" font-size="9.5" font-weight="400">rollout_data_refs</text>
+
+    <rect x="0" y="334" width="188" height="52" rx="7" fill="#1b2330" stroke="#a371f7"/>
+    <text x="12" y="355" fill="#a371f7">CRITIC (64 GPU)</text><text x="12" y="372" fill="#8b98a9" font-size="9.5" font-weight="400">122B, lr 1.5e-5</text>
+
+    <rect x="0" y="394" width="188" height="52" rx="7" fill="#1b2330" stroke="#58a6ff"/>
+    <text x="12" y="415" fill="#58a6ff">ACTOR (同 64 GPU)</text><text x="12" y="432" fill="#8b98a9" font-size="9.5" font-weight="400">122B, lr 1.0e-6</text>
+  </g>
+
+  <!-- lane guides -->
+  <g stroke="#2c3746" stroke-width="1" stroke-dasharray="3 5">
+    <line x1="196" y1="60"  x2="1290" y2="60"/>
+    <line x1="196" y1="120" x2="1290" y2="120"/>
+    <line x1="196" y1="180" x2="1290" y2="180"/>
+    <line x1="196" y1="240" x2="1290" y2="240"/>
+    <line x1="196" y1="300" x2="1290" y2="300"/>
+    <line x1="196" y1="360" x2="1290" y2="360"/>
+    <line x1="196" y1="420" x2="1290" y2="420"/>
+  </g>
+
+  <!-- time phase headers -->
+  <g font-size="10.5" text-anchor="middle" font-weight="700">
+    <rect x="200" y="6" width="290" height="22" rx="5" fill="rgba(63,185,80,.14)" stroke="#3fb950"/>
+    <text x="345" y="21" fill="#3fb950">A · ROLLOUT（约 20 分钟，主导 step 时间）</text>
+    <rect x="496" y="6" width="176" height="22" rx="5" fill="rgba(210,153,34,.14)" stroke="#d29922"/>
+    <text x="584" y="21" fill="#d29922">B · 转换 + DP 切分</text>
+    <rect x="678" y="6" width="220" height="22" rx="5" fill="rgba(163,113,247,.14)" stroke="#a371f7"/>
+    <text x="788" y="21" fill="#a371f7">C · CRITIC 训练</text>
+    <rect x="904" y="6" width="242" height="22" rx="5" fill="rgba(88,166,255,.14)" stroke="#58a6ff"/>
+    <text x="1025" y="21" fill="#58a6ff">D · ACTOR 训练</text>
+    <rect x="1152" y="6" width="138" height="22" rx="5" fill="rgba(255,123,114,.14)" stroke="#ff7b72"/>
+    <text x="1221" y="21" fill="#ff7b72">E · 权重同步</text>
+  </g>
+
+  <!-- A: rollout -->
+  <rect x="204" y="100" width="282" height="40" rx="6" fill="#1e3326" stroke="#3fb950"/>
+  <text x="212" y="116" fill="#3fb950" font-size="10" font-weight="700">generate.remote(rollout_id)</text>
+  <text x="212" y="131" fill="#8b98a9" font-size="9">get_samples(280) → 280 个 asyncio task</text>
+
+  <rect x="204" y="160" width="282" height="40" rx="6" fill="#173038" stroke="#56d4dd"/>
+  <text x="212" y="176" fill="#56d4dd" font-size="10" font-weight="700">280 容器并行跑 Terminus2 agent 循环</text>
+  <text x="212" y="191" fill="#8b98a9" font-size="9">≤60 轮 / 90 min wall · 跑完 tests/ 得 0/1 奖励</text>
+
+  <rect x="204" y="220" width="282" height="40" rx="6" fill="#1e3326" stroke="#3fb950"/>
+  <text x="212" y="236" fill="#3fb950" font-size="10" font-weight="700">POST /generate  ×  数万次</text>
+  <text x="212" y="251" fill="#8b98a9" font-size="9">input_ids + return_logprob=True，router 负载均衡</text>
+
+  <g stroke="#56d4dd" stroke-width="1.6">
+    <path d="M300,205 L300,218" marker-end="url(#a2)"/>
+    <path d="M400,218 L400,205" stroke="#3fb950" marker-end="url(#a2)"/>
+  </g>
+  <text x="492" y="182" fill="#e3b341" font-size="9.5">✂ 攒满 256 组</text>
+  <text x="492" y="196" fill="#e3b341" font-size="9.5">→ cancel 慢尾</text>
+
+  <!-- B: convert -->
+  <rect x="500" y="100" width="168" height="40" rx="6" fill="#332a14" stroke="#d29922"/>
+  <text x="508" y="116" fill="#d29922" font-size="9.5" font-weight="700">token cap 裁剪 65536</text>
+  <text x="508" y="131" fill="#8b98a9" font-size="9">_convert_samples_to_train_data</text>
+
+  <rect x="500" y="280" width="168" height="40" rx="6" fill="#332a14" stroke="#d29922"/>
+  <text x="508" y="296" fill="#d29922" font-size="9.5" font-weight="700">4 × Box(ray.put(...))</text>
+  <text x="508" y="311" fill="#8b98a9" font-size="9">build_dp_schedule → KK 均衡</text>
+  <path d="M584,142 L584,278" stroke="#d29922" stroke-width="1.6" marker-end="url(#a1)"/>
+
+  <!-- driver receives -->
+  <rect x="500" y="40" width="168" height="40" rx="6" fill="#2a1a26" stroke="#f778ba"/>
+  <text x="508" y="56" fill="#f778ba" font-size="9.5" font-weight="700">ray.get(future)</text>
+  <text x="508" y="71" fill="#8b98a9" font-size="9">拿到 4 个 ObjectRef（不是数据）</text>
+  <path d="M668,300 C700,300 700,80 672,64" stroke="#d29922" stroke-width="1.5" fill="none" marker-end="url(#a1)"/>
+
+  <!-- next rollout overlap -->
+  <rect x="678" y="100" width="612" height="34" rx="6" fill="rgba(63,185,80,.10)" stroke="#3fb950" stroke-dasharray="5 4"/>
+  <text x="984" y="121" fill="#3fb950" font-size="10.5" font-weight="700" text-anchor="middle">
+    ★ generate.remote(rollout_id + 1) —— 下一批 rollout 已经在跑，与下面的训练完全重叠（train_async.py:71-72）
+  </text>
+  <rect x="678" y="160" width="612" height="34" rx="6" fill="rgba(86,212,221,.08)" stroke="#56d4dd" stroke-dasharray="5 4"/>
+  <text x="984" y="181" fill="#56d4dd" font-size="10" text-anchor="middle">新一批 280 个沙箱同时在建/在跑</text>
+  <rect x="678" y="220" width="612" height="34" rx="6" fill="rgba(63,185,80,.08)" stroke="#3fb950" stroke-dasharray="5 4"/>
+  <text x="984" y="241" fill="#8b98a9" font-size="10" text-anchor="middle">SGLang 持续服务旧权重（本 step 结束才更新）⇒ 天然的 off-policy 间隙</text>
+
+  <!-- C: critic -->
+  <rect x="682" y="340" width="212" height="94" rx="6" fill="#251c38" stroke="#a371f7"/>
+  <text x="690" y="357" fill="#a371f7" font-size="10" font-weight="700">critic_model.async_train()</text>
+  <text x="690" y="373" fill="#c8d3e0" font-size="9">① wake_up() 上显存</text>
+  <text x="690" y="387" fill="#c8d3e0" font-size="9">② ray.get(Box) 取本 rank 数据</text>
+  <text x="690" y="401" fill="#c8d3e0" font-size="9">③ forward_only(get_values) → values</text>
+  <text x="690" y="415" fill="#c8d3e0" font-size="9">④ GAE → returns；value_loss 反向</text>
+  <text x="690" y="429" fill="#c8d3e0" font-size="9">⑤ sleep() 让位给 actor</text>
+
+  <!-- values handoff -->
+  <path d="M894,388 L906,388" stroke="#a371f7" stroke-width="2.2" marker-end="url(#a4)"/>
+  <text x="900" y="470" fill="#a371f7" font-size="9.5" text-anchor="middle">external_data={"values": cpu tensors}</text>
+  <text x="900" y="484" fill="#8b98a9" font-size="9" text-anchor="middle">仅最后一个 PP stage 有值</text>
+  <path d="M900,462 L900,440" stroke="#a371f7" stroke-width="1.4" stroke-dasharray="3 3" marker-end="url(#a4)"/>
+
+  <!-- D: actor -->
+  <rect x="908" y="400" width="234" height="118" rx="6" fill="#152740" stroke="#58a6ff"/>
+  <text x="916" y="417" fill="#58a6ff" font-size="10" font-weight="700">actor_model.async_train(external_data)</text>
+  <text x="916" y="433" fill="#c8d3e0" font-size="9">① wake_up()（critic 已 sleep）</text>
+  <text x="916" y="447" fill="#c8d3e0" font-size="9">② old_actor 前向 → old_log_probs</text>
+  <text x="916" y="461" fill="#c8d3e0" font-size="9">③ 收 critic 的 values → GPU</text>
+  <text x="916" y="475" fill="#c8d3e0" font-size="9">④ compute_advantages_and_returns（GAE）</text>
+  <text x="916" y="489" fill="#c8d3e0" font-size="9">⑤ rollout_data_postprocess 兜底裁剪</text>
+  <text x="916" y="503" fill="#c8d3e0" font-size="9">⑥ 64 个 micro-batch 梯度累积 → optimizer.step()</text>
+
+  <text x="1025" y="540" fill="#e3b341" font-size="9.5" text-anchor="middle">rollout_id &lt; 2 时这一整块被跳过（只 ray.get(value_refs)）</text>
+
+  <!-- E: weight sync -->
+  <rect x="1156" y="400" width="130" height="60" rx="6" fill="#33191a" stroke="#ff7b72"/>
+  <text x="1164" y="417" fill="#ff7b72" font-size="9.5" font-weight="700">update_weights()</text>
+  <text x="1164" y="432" fill="#c8d3e0" font-size="8.8">pause → flush_cache</text>
+  <text x="1164" y="445" fill="#c8d3e0" font-size="8.8">→ NCCL bcast → continue</text>
+
+  <path d="M1221,398 C1221,330 1221,280 1221,258" stroke="#ff7b72" stroke-width="2.2" fill="none" marker-end="url(#a3)"/>
+  <text x="1214" y="330" fill="#ff7b72" font-size="9" text-anchor="end">新权重</text>
+  <text x="1214" y="343" fill="#ff7b72" font-size="9" text-anchor="end">进引擎</text>
+
+  <!-- offload timeline note -->
+  <rect x="682" y="556" width="604" height="44" rx="7" fill="#141a24" stroke="#e3b341"/>
+  <text x="694" y="574" fill="#e3b341" font-size="10" font-weight="700">同一批 64 张 GPU 上的显存时间轴（offload_train=True 强制）</text>
+  <text x="694" y="590" fill="#8b98a9" font-size="9.5">critic 上卡 → critic 下卡 → actor 上卡 → actor 下卡 → 权重同步时 actor 再短暂上卡。任一时刻只有一个 122B 模型驻留。</text>
+
+  <!-- periodic -->
+  <rect x="204" y="620" width="1082" height="66" rx="8" fill="#141a24" stroke="#2c3746"/>
+  <text x="216" y="639" fill="#79c0ff" font-size="10.5" font-weight="700">周期性动作（should_run_periodic_action）</text>
+  <text x="216" y="656" fill="#8b98a9" font-size="9.5">• SAVE_INTERVAL=10：actor + critic 各存一次 checkpoint（critic-only 阶段不存 actor）</text>
+  <text x="216" y="672" fill="#8b98a9" font-size="9.5">• EVAL_INTERVAL=10：89 个 Terminal-Bench 2 任务、pass@3、总 wall 3 小时（10800 s）、独立 trial 命名空间、不套用训练侧 hook</text>
+</svg>
+</div>
+
+<div class="grid g2">
+<div class="card">
+<h3 style="margin-top:0">driver 侧的真实代码（train_async.py:63-105）</h3>
+<pre><span class="c"># 循环外：先把第一批 rollout 发出去</span>
+rollout_data_next_future = rollout_manager.generate.remote(start_rollout_id)
+
+<span class="k">for</span> rollout_id <span class="k">in</span> range(start_rollout_id, num_rollout):
+    <span class="c"># ① 收上一次发出的 rollout（此时它多半已经跑完了）</span>
+    rollout_data_curr_ref = ray.get(rollout_data_next_future)
+
+    <span class="c"># ② 立刻把下一批发出去 —— 这就是"异步"的全部含义</span>
+    <span class="k">if</span> rollout_id + 1 &lt; num_rollout:
+        rollout_data_next_future = rollout_manager.generate.remote(rollout_id + 1)
+
+    <span class="c"># ③ critic 先训，把 values 交给 actor</span>
+    <span class="k">if</span> args.use_critic:
+        actor_trains_this_step = rollout_id &gt;= args.num_critic_only_steps
+        value_refs = critic_model.async_train(rollout_id, rollout_data_curr_ref)
+        <span class="k">if</span> actor_trains_this_step:
+            ray.get(actor_model.async_train(rollout_id, rollout_data_curr_ref,
+                                            external_data=value_refs))
+        <span class="k">else</span>:
+            ray.get(value_refs)              <span class="c"># 前 2 步：只训 critic</span>
+
+    <span class="c"># ④ 周期性存档</span>
+    <span class="k">if</span> should_run_periodic_action(rollout_id, save_interval, ...): ...
+
+    <span class="c"># ⑤ 权重同步前必须先把在飞的 generate 收干净</span>
+    <span class="k">if</span> (rollout_id + 1) % args.update_weights_interval == 0:
+        rollout_data_curr_ref = ray.get(rollout_data_next_future) <span class="k">if</span> ... <span class="k">else</span> <span class="n">None</span>
+        rollout_data_next_future = <span class="n">None</span>
+        actor_model.update_weights()
+
+    <span class="k">if</span> should_run_periodic_action(rollout_id, eval_interval, ...):
+        ray.get(rollout_manager.eval.remote(rollout_id))</pre>
+</div>
+<div class="card">
+<h3 style="margin-top:0">读这段代码的三个要点</h3>
+<div class="note" style="margin-top:0">
+  <b>① 异步的收益与代价</b>：rollout 约 20 分钟、训练也要几十分钟，重叠后 step 时间接近 max 而非 sum。
+  代价是训练用的数据来自<b>上一版权重</b>，即天然 off-policy——这正是 PPO 的 ratio 与 clip 要处理的对象。
+</div>
+<div class="warn">
+  <b>② update_weights 前必须 drain</b>：<code>update_weights_interval=1</code>（默认），所以每步都会
+  先 <code>ray.get</code> 掉在飞的 generate 再同步权重。否则权重会在生成中途被替换，
+  一条轨迹的前半段和后半段来自不同的模型，logprob 就没有意义了。
+</div>
+<div class="ok">
+  <b>③ critic 先行不是随意排的</b>：actor 计算 advantage 需要 <code>values</code>，
+  而 values 只能由 critic 前向给出。二者又共用 GPU，所以物理上只能串行：
+  critic 上卡算 values + 训自己 → 下卡 → actor 上卡拿着 values 算 GAE + 训自己。
+</div>
+</div>
+</div>
+</section>
+
+<section id="s6">
+<h2><span class="num">6</span>训练方法：这一版 PPO 的每个决定</h2>
+<p class="lead">
+  slime 支持 <code>ppo / grpo / gspo / reinforce_plus_plus / reinforce_plus_plus_baseline</code>。
+  这个 run 选 <b>ppo</b>——唯一需要独立 value 网络的那个，也是唯一会让显存翻倍的那个。
+</p>
+
+<h3>为什么在这个任务上选 PPO 而不是 GRPO</h3>
+<div class="grid g2">
+  <div class="card tight">
+    <b style="color:var(--dim)">GRPO 的做法</b>
+    <p style="font-size:12.5px;color:var(--dim)">
+      同一 prompt 采 n 条，用组内 <code>reward - mean</code>（可选 <code>/std</code>）当 advantage，
+      不需要 critic。前提是 <b>n 要足够大</b>才有意义的组内基线。
+    </p>
+    <pre style="margin:8px 0 0;font-size:11px">advantage_i = (r_i - mean(r)) / (std(r) + 1e-6)</pre>
+  </div>
+  <div class="card tight" style="border-color:var(--critic)">
+    <b style="color:var(--critic)">这里的现实约束</b>
+    <p style="font-size:12.5px;color:#c8d3e0">
+      一条轨迹 = 一个云容器 + 最长 90 分钟 + 一次完整单元测试。
+      <code>n_samples_per_prompt=1</code> —— 采样成本让 GRPO 的组内基线<b>根本无法建立</b>（组里只有一个样本，减去均值恒为 0）。
+      所以必须用一个<b>学出来的 value 函数</b>当基线，即 PPO。
+    </p>
+    <div class="chips"><span class="chip hi">n=1 训练 / pass@3 评测</span></div>
+  </div>
+</div>
+
+<h3>PPO 数学（<code>slime/utils/ppo_utils.py</code> + <code>slime/backends/megatron_utils/loss.py</code>）</h3>
+
+<div class="card">
+<b style="color:var(--critic)">Step 1 · 把稀疏奖励铺成 per-token reward</b>（loss.py:738-750）
+<pre>kl_coef = -args.kl_coef                     <span class="c"># 本次 KL_COEF=0 ⇒ 整项为 0</span>
+<span class="k">for</span> reward, k <span class="k">in</span> zip(old_rewards, kl):
+    k *= kl_coef                            <span class="c"># per-token KL 惩罚（此处全 0）</span>
+    <span class="k">if</span> cp_rank == 0:
+        k[-1] += reward                     <span class="c"># ★ 0/1 任务奖励只加在最后一个 token 上</span>
+    rewards.append(k)</pre>
+<p style="font-size:12.5px;color:var(--dim);margin-top:6px">
+  也就是说：一条 3 万 token 的轨迹，reward 向量是 <code>[0, 0, …, 0, 1]</code> 或全 0。
+  <b>把这个极端稀疏的信号分配到每个 token 上，就是 critic 存在的全部意义。</b>
+</p>
+</div>
+
+<div class="card">
+<b style="color:var(--critic)">Step 2 · GAE 反向递推</b>（ppo_utils.py:482-503 <code>vanilla_gae</code>，长序列走 <code>chunked_gae</code> 并行前缀扫描）
+<pre>δ_t   = r_t + γ · V(s_{t+1}) − V(s_t)
+A_t   = δ_t + γλ · A_{t+1}                  <span class="c"># 从后往前</span>
+ret_t = A_t + V(s_t)                        <span class="c"># critic 的回归目标</span></pre>
+<p style="font-size:12.5px;color:#c8d3e0;margin-top:6px">
+  本次 <b>γ = 1.0, λ = 1.0</b>（<code>arguments.py</code> 默认，脚本未改）。代入上式：
+  <code>A_t = Σ_{k≥t} δ_k = R − V(s_t)</code>，其中 R 是轨迹终局奖励。
+  也就是<b>退化成 Monte-Carlo advantage</b>：不做时间折扣、不做偏差-方差权衡，
+  完全信任 critic 给出的状态价值作为基线。对"要么全过要么全不过"的终端任务，
+  中途并没有可信的即时奖励可折扣，这个选择是自洽的。
+</p>
+</div>
+
+<div class="grid g2">
+<div class="card">
+<b style="color:var(--actor)">Step 3 · Actor: clipped policy loss</b>（ppo_utils.py:125-149）
+<pre>ratio = exp(−ppo_kl)                <span class="c"># = π_new/π_old</span>
+L1 = −ratio · A
+L2 = −clamp(ratio, 1−ε, 1+ε_high) · A
+L  = max(L1, L2)                    <span class="c"># 悲观取大</span>
+clipfrac = (L2 &gt; L1)                <span class="c"># 监控指标</span></pre>
+<ul style="font-size:12.5px;color:#c8d3e0;margin:8px 0 0 18px">
+  <li><code>EPS_CLIP=0.2</code>，未设 <code>eps_clip_high</code> ⇒ 对称 [0.8, 1.2]。</li>
+  <li><b>KL 项关</b>（<code>USE_KL_LOSS=0</code>）⇒ <b>不加载 reference model</b>，省一整份 122B 显存。约束完全靠 clip。</li>
+  <li><b>熵项关</b>（<code>ENTROPY_COEF=0</code>）但仍以 no_grad 记录熵——熵崩塌是策略退化的首要征兆。</li>
+  <li><code>KEEP_OLD_ACTOR=1</code> ⇒ ratio 的分母来自训练侧的 old_actor 快照，
+      <b>不是</b> rollout 引擎返回的 logprob（<code>USE_ROLLOUT_LOGPROBS=0</code>）。</li>
+</ul>
+</div>
+<div class="card">
+<b style="color:var(--critic)">Step 4 · Critic: clipped value loss</b>（loss.py:1146-1201）
+<pre>v_clip = v_old + clamp(v − v_old, −c, +c)   <span class="c"># c = value_clip = 0.2</span>
+L = max((v_clip − ret)², (v − ret)²)</pre>
+<ul style="font-size:12.5px;color:#c8d3e0;margin:8px 0 0 18px">
+  <li>诊断指标 <code>explained_variance = 1 − Var(ret − v)/Var(ret)</code>（loss.py:574-668，跨 DP+CP 全局归约）。
+      <b>这是判断这个 run 健康度的第一指标</b>：EV 由负转正说明 value head 开始真的学到东西。</li>
+  <li>value head 是 <code>output_size=1</code> 的新层，冷启动随机初始化，所以 lr 给到 30×。</li>
+</ul>
+</div>
+</div>
+
+<h3>为什么 <code>USE_ROLLOUT_LOGPROBS=0</code>（一个容易被忽略但很关键的选择）</h3>
+<div class="card">
+<p style="font-size:13px">
+  Harbor 的 LLM 后端<b>无条件</b>把 SGLang 返回的 <code>output_token_logprobs</code> 写进 <code>sample.rollout_log_probs</code>，
+  所以这些数据一定会流到训练侧。但 <code>USE_ROLLOUT_LOGPROBS=0</code> 意味着<b>不用它们当 PPO ratio 的分母</b>，
+  而是让 actor 在训练前重新前向一遍算出 old_log_probs。
+</p>
+<div class="grid g2" style="margin-top:10px">
+  <div class="note" style="margin:0">
+    <b>用 rollout logprob 的问题</b>：SGLang 与 Megatron 是两套完全不同的实现
+    （kernel、精度、并行方式都不同，SGLang 甚至自带一份 fla 副本）。二者的 logprob 存在系统性偏差，
+    直接当分母会给 ratio 引入与策略更新无关的噪声。
+  </div>
+  <div class="ok" style="margin:0">
+    <b>代价与补偿</b>：多一遍 122B 前向。但换来 ratio 在数值上严格自洽。
+    偏差本身仍可观测：打开 <code>GET_MISMATCH_METRICS=1</code> + record-only TIS 函数，
+    可以在<b>不改动 loss</b> 的前提下把 <code>train/tis</code>、<code>train_rollout_logprob_abs_diff</code> 记进 W&amp;B。
+  </div>
+</div>
+<div class="warn" style="margin-bottom:0">
+  这也解释了脚本里 <code>FLA_INTRACARD_CP=0</code> 的必要性：fla 0.4.2 在 inference_mode 下对 ≥24576 token 的序列
+  自动切换另一套前向算法，<b>数值会变</b>。若不关掉，训练侧 logprob 与 rollout 侧就会失配。
+</div>
+</div>
+
+<h3>本次 PPO 配方一览</h3>
+<div class="tblwrap">
+<table>
+<thead><tr><th>项</th><th>取值</th><th>为什么</th></tr></thead>
+<tbody>
+<tr><td class="m">advantage_estimator</td><td class="m">ppo</td><td>n=1 无法建 GRPO 组内基线，必须有学出来的 value 基线</td></tr>
+<tr><td class="m">γ / λ</td><td class="m">1.0 / 1.0</td><td>GAE 退化为 MC advantage；终端任务中途无可信即时奖励</td></tr>
+<tr><td class="m">eps_clip</td><td class="m">0.2（对称）</td><td>唯一的策略约束手段（KL 已关）</td></tr>
+<tr><td class="m">use_kl_loss / kl_coef</td><td class="m">0 / 0.0</td><td>省掉一份 122B reference model 的显存</td></tr>
+<tr><td class="m">entropy_coef</td><td class="m">0.0（但仍记录）</td><td>自定义 loss 跳过带梯度的熵图；熵仅作健康监控</td></tr>
+<tr><td class="m">value_clip</td><td class="m">0.2</td><td>防止冷启动 critic 在 30× lr 下单步跳变过大</td></tr>
+<tr><td class="m">num_critic_only_steps</td><td class="m">2</td><td>rollout 0/1 只训 critic 暖机，避免用垃圾 advantage 更新策略</td></tr>
+<tr><td class="m">actor lr / critic lr</td><td class="m">1.0e-6 / 1.5e-5</td><td>2× / 30× canonical 5e-7，constant 无 warmup/decay</td></tr>
+<tr><td class="m">keep_old_actor</td><td class="m">1</td><td>ratio 分母用训练侧快照，与 rollout 引擎数值解耦</td></tr>
+<tr><td class="m">calculate_per_token_loss</td><td class="m">0</td><td>per-sample 均值再按组归一（group_mask_sums 作分母）</td></tr>
+<tr><td class="m">rewards_normalization</td><td class="m">不生效</td><td>group norm 只在 grpo/gspo/r++baseline 分支执行，ppo 原样透传给 GAE</td></tr>
+</tbody>
+</table>
+</div>
+</section>
+
+<section id="s7">
+<h2><span class="num">7</span>与 Engine 的交互：训练侧和推理侧怎么对话</h2>
+<p class="lead">
+  训练侧（Megatron，64 卡）与推理侧（SGLang，24 卡）是<b>两套完全独立的进程与并行布局</b>：
+  一边 TP2×PP4×CP2×EP16，一边 3 个纯 TP8。它们之间只有三条通道。
+</p>
+
+<div class="grid g3">
+  <div class="card" style="border-top:3px solid var(--sync)">
+    <b>通道 A · 权重（GPU→GPU）</b>
+    <p style="font-size:12.5px;color:var(--dim)">NCCL 广播。训练侧 rank 0 + 全部引擎 GPU 组成一个专用进程组
+    <code>slime-pp_{pp_rank}</code>。数据量最大，每步一次。</p>
+  </div>
+  <div class="card" style="border-top:3px solid var(--rollout)">
+    <b>通道 B · 推理请求（HTTP）</b>
+    <p style="font-size:12.5px;color:var(--dim)">Agent（跑在 rollout 节点的 TrialWorker 里）→ SGLang router → 某个引擎。
+    <code>POST /generate</code>，纯 JSON，走 token id。</p>
+  </div>
+  <div class="card" style="border-top:3px solid var(--buffer)">
+    <b>通道 C · 轨迹数据（CPU 共享内存）</b>
+    <p style="font-size:12.5px;color:var(--dim)">Ray object store。RolloutManager put，训练 actor 按 DP rank get。
+    不经 driver、不走 NCCL。</p>
+  </div>
+</div>
+
+<h3>通道 A 详解：<code>actor_model.update_weights()</code> 的完整 5 步</h3>
+<div class="svgwrap">
+<svg viewBox="0 0 1240 400" xmlns="http://www.w3.org/2000/svg" font-family="ui-monospace,monospace">
+  <defs><marker id="w1" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="#ff7b72"/></marker></defs>
+
+  <rect x="14" y="14" width="1212" height="34" rx="7" fill="#33191a" stroke="#ff7b72"/>
+  <text x="620" y="36" fill="#ff7b72" font-size="12" font-weight="700" text-anchor="middle">
+    slime/backends/megatron_utils/update_weight/update_weight_from_distributed.py :: update_weights()
+  </text>
+
+  <g font-size="10">
+    <!-- step 1 -->
+    <rect x="14" y="66" width="232" height="118" rx="8" fill="#141a24" stroke="#ff7b72"/>
+    <text x="26" y="86" fill="#ff7b72" font-size="11" font-weight="700">① 建组（仅首次/新引擎）</text>
+    <text x="26" y="105" fill="#c8d3e0">connect_rollout_engines()</text>
+    <text x="26" y="120" fill="#8b98a9">engine.init_weights_update_group</text>
+    <text x="26" y="134" fill="#8b98a9">.remote(master_addr, port,</text>
+    <text x="26" y="148" fill="#8b98a9">  rank_offset, world_size, "nccl")</text>
+    <text x="26" y="166" fill="#e3b341">world = Σ引擎GPU + 1 训练 rank</text>
+    <text x="26" y="179" fill="#6b7688">超时 SLIME_NCCL_GROUP_TIMEOUT=120min</text>
+
+    <!-- step 2 -->
+    <rect x="258" y="66" width="216" height="118" rx="8" fill="#141a24" stroke="#ff7b72"/>
+    <text x="270" y="86" fill="#ff7b72" font-size="11" font-weight="700">② 冻结推理</text>
+    <text x="270" y="105" fill="#c8d3e0">rank0 → 所有引擎：</text>
+    <text x="270" y="121" fill="#8b98a9">pause_generation.remote()</text>
+    <text x="270" y="136" fill="#8b98a9">flush_cache.remote()</text>
+    <text x="270" y="156" fill="#e3b341">KV cache 必须清空：旧权重</text>
+    <text x="270" y="169" fill="#e3b341">算出的 KV 与新权重不兼容</text>
+    <text x="270" y="182" fill="#6b7688">然后 gloo barrier 对齐全体</text>
+
+    <!-- step 3 -->
+    <rect x="486" y="66" width="270" height="118" rx="8" fill="#141a24" stroke="#ff7b72"/>
+    <text x="498" y="86" fill="#ff7b72" font-size="11" font-weight="700">③ 两趟收集参数</text>
+    <text x="498" y="105" fill="#c8d3e0">_iter_non_expert_chunks()  (TP)</text>
+    <text x="498" y="120" fill="#8b98a9">all_gather_param → convert_to_hf</text>
+    <text x="498" y="134" fill="#8b98a9">→ 按 update_weight_buffer_size 分桶</text>
+    <text x="498" y="152" fill="#c8d3e0">_iter_expert_chunks()  (EP)</text>
+    <text x="498" y="166" fill="#8b98a9">TP gather → 攒够再 EP all_gather</text>
+    <text x="498" y="180" fill="#e3b341">116B 专家参数必须分桶，否则爆内存</text>
+
+    <!-- step 4 -->
+    <rect x="768" y="66" width="236" height="118" rx="8" fill="#141a24" stroke="#ff7b72"/>
+    <text x="780" y="86" fill="#ff7b72" font-size="11" font-weight="700">④ 逐桶广播</text>
+    <text x="780" y="105" fill="#c8d3e0">acquire(rollout_engine_lock)</text>
+    <text x="780" y="120" fill="#8b98a9">engine.update_weights_from_</text>
+    <text x="780" y="134" fill="#8b98a9">  distributed(names,dtypes,shapes)</text>
+    <text x="780" y="148" fill="#8b98a9">dist.broadcast(param, src=0)</text>
+    <text x="780" y="162" fill="#c8d3e0">release(lock)  + gloo barrier</text>
+    <text x="780" y="179" fill="#e3b341">锁是为了防 NCCL 死锁</text>
+
+    <!-- step 5 -->
+    <rect x="1016" y="66" width="210" height="118" rx="8" fill="#141a24" stroke="#3fb950"/>
+    <text x="1028" y="86" fill="#3fb950" font-size="11" font-weight="700">⑤ 恢复推理</text>
+    <text x="1028" y="105" fill="#c8d3e0">continue_generation.remote()</text>
+    <text x="1028" y="122" fill="#8b98a9">weight_version += 1</text>
+    <text x="1028" y="142" fill="#8b98a9">引擎带着新权重继续服务</text>
+    <text x="1028" y="156" fill="#8b98a9">已在飞的 Agent 会话无感</text>
+    <text x="1028" y="176" fill="#e3b341">（下一轮请求即用新权重）</text>
+  </g>
+
+  <path d="M246,125 L256,125" stroke="#ff7b72" stroke-width="2" marker-end="url(#w1)"/>
+  <path d="M474,125 L484,125" stroke="#ff7b72" stroke-width="2" marker-end="url(#w1)"/>
+  <path d="M756,125 L766,125" stroke="#ff7b72" stroke-width="2" marker-end="url(#w1)"/>
+  <path d="M1004,125 L1014,125" stroke="#ff7b72" stroke-width="2" marker-end="url(#w1)"/>
+
+  <!-- offload wrapper -->
+  <rect x="14" y="204" width="1212" height="80" rx="9" fill="rgba(227,179,65,.07)" stroke="#e3b341" stroke-dasharray="5 4"/>
+  <text x="28" y="224" fill="#e3b341" font-size="11" font-weight="700">PPO 特有的外层包装（actor.py:609-668）</text>
+  <text x="28" y="243" fill="#c8d3e0" font-size="10">offload_train=True 且 use_critic 时：权重同步<tspan font-weight="700" fill="#fff">之前</tspan> wake_up() 把 actor 拉回显存 → 重建约 148 个 NCCL 进程组 → 同步 → sleep() 再放回。</text>
+  <text x="28" y="261" fill="#8b98a9" font-size="10">这意味着"权重同步"这一步在 PPO 下并不便宜：它包含一次完整的 offload 往返 + 进程组重建。这也是 SLIME_NEW_GROUP_TIMEOUT_MINUTES=120 必须同时抬高的原因</text>
+  <text x="28" y="277" fill="#8b98a9" font-size="10">（DISTRIBUTED_TIMEOUT_MINUTES 只管初始建组，而每次 offload reload 都会用 reloadable_process_group.py 的默认 30 min 重建）。</text>
+
+  <!-- fault tolerance -->
+  <rect x="14" y="300" width="1212" height="86" rx="9" fill="#141a24" stroke="#2c3746"/>
+  <text x="28" y="320" fill="#79c0ff" font-size="11" font-weight="700">容错（USE_FAULT_TOLERANCE=1）</text>
+  <text x="28" y="339" fill="#8b98a9" font-size="10">• 同步前先 recover_updatable_engines()：把挂掉的 SGLang 引擎重启，再取回 (engines, lock, num_new, gpu_counts, gpu_offsets)。</text>
+  <text x="28" y="356" fill="#8b98a9" font-size="10">• 若有新引擎（num_new &gt; 0），先重建 NCCL 组再广播——否则新引擎不在通信域里，权重进不去。</text>
+  <text x="28" y="373" fill="#8b98a9" font-size="10">• 健康监控：health_monitor.py 在 generate() 入口 resume；Harbor 侧还有 TrialWorker 健康检查（本次 harbor_kill_unhealthy_trial_workers=false，只观测不杀）。</text>
+</svg>
+</div>
+
+<h3>通道 B 详解：Agent 与 SGLang 的一次往返</h3>
+<pre><span class="c"># 请求侧：slime_plugins/harbor/llm.py::call()</span>
+prompt_token_ids = self._encode_messages(messages)     <span class="c"># 训练侧同一个 tokenizer</span>
+
+<span class="c"># 主动上下文守卫：SGLang 会对超长 prompt 直接 HTTP 400，</span>
+<span class="c"># 若让它变成通用 RuntimeError，Terminus2 的摘要 fallback 就不会触发，整条轨迹白跑。</span>
+<span class="k">if</span> len(prompt_token_ids) + max_new &gt; self._max_context_tokens:   <span class="c"># 128000</span>
+    <span class="k">raise</span> ContextLengthExceededError(...)   <span class="c"># ← 让 agent 去摘要重试</span>
+
+payload = {<span class="s">"input_ids"</span>: prompt_token_ids,
+           <span class="s">"sampling_params"</span>: {temperature, top_p, top_k, max_new_tokens,
+                                stop_token_ids, skip_special_tokens=<span class="n">True</span>,
+                                no_stop_trim=<span class="n">True</span>, spaces_between_special_tokens=<span class="n">False</span>},
+           <span class="s">"return_logprob"</span>: <span class="n">True</span>}
+resp = <span class="k">await</span> httpx_client.post(<span class="s">f"{router_url}/generate"</span>, json=payload)
+
+<span class="c"># 响应侧：从 logprob 里同时还原出 token id —— 保证 id 与 logprob 严格一一对应</span>
+token_logprobs        = resp[<span class="s">"meta_info"</span>][<span class="s">"output_token_logprobs"</span>]
+completion_token_ids  = [int(x[1]) <span class="k">for</span> x <span class="k">in</span> token_logprobs]
+logprobs              = [float(x[0]) <span class="k">for</span> x <span class="k">in</span> token_logprobs]
+<span class="c"># → 写进 rollout_details，最终成为 Sample.tokens / Sample.rollout_log_probs</span></pre>
+
+<div class="grid g2">
+<div class="note" style="margin-top:14px">
+  <b>为什么 Agent 不直连引擎而要走 router</b>：3 个引擎彼此独立、无共享状态。
+  router 做负载均衡（也支持按 <code>X-SMG-Routing-Key</code> 的一致性哈希，让同一会话粘在同一引擎上以复用 prefix cache）。
+  Agent 只需要知道一个地址 <code>http://{router_ip}:{router_port}</code>。
+</div>
+<div class="ok" style="margin-top:14px">
+  <b>TrialWorker 的意义</b>：<code>harbor_trial_node_spread=true</code> 让 RolloutManager 在每个 rollout 节点上
+  起一个 0-GPU 的 Ray actor（<code>max_concurrency=harbor_trials_per_node=35</code>）。
+  Agent 的 asyncio 事件循环、httpx 连接池、沙箱 SDK 调用都在这些 worker 里跑，
+  不再挤在 RolloutManager 单进程。<code>harbor_fallback_to_inprocess_trials=false</code> ⇒
+  worker 全挂就直接报错，而不是悄悄退回单进程把自己拖死。
+</div>
+</div>
+
+<h3>Eval 通道：与训练走同一条路，但契约相反</h3>
+<div class="tblwrap">
+<table>
+<thead><tr><th></th><th>训练 rollout</th><th>eval rollout</th></tr></thead>
+<tbody>
+<tr><td><b>任务集</b></td><td>tmax-15k 14601 个，游标循环</td><td>Terminal-Bench 2 全部 89 个，每次<b>各跑一遍</b></td></tr>
+<tr><td><b>采样数</b></td><td>n=1</td><td>n=3（pass@3，取组内 max）</td></tr>
+<tr><td><b>过采样/砍尾</b></td><td>280 发 → 收 256 → cancel 慢尾</td><td><b>不砍尾</b>：慢任务也是有效数据点，必须等</td></tr>
+<tr><td><b>部分组</b></td><td>允许（<code>partial_group_min_units=1</code>）</td><td>禁止：pass@k 需要 k 次全到才能取 max</td></tr>
+<tr><td><b>训练侧 hook</b></td><td>套用（长度整形、动态过滤、token cap）</td><td><b>不套用</b>：保证 <code>eval/harbor</code> 是干净的平均任务奖励 = TB2 通过率</td></tr>
+<tr><td><b>采样温度</b></td><td><code>rollout_temperature</code></td><td><code>EVAL_TEMPERATURE=1.0 / top_p 0.95 / top_k 20</code>（copy args 后覆盖，不污染训练）</td></tr>
+<tr><td><b>命名空间</b></td><td><code>slime-r{id}-g{g}-s{s}-i{i}</code></td><td><code>slime-eval-r{id}-...</code>（避免与 rollout 0 的产物互相覆盖）</td></tr>
+<tr><td><b>总时限</b></td><td>每试验 5400 s</td><td><code>harbor_eval_total_timeout_sec=10800</code>（3 小时覆盖整轮 89 任务）</td></tr>
+</tbody>
+</table>
+</div>
+<p style="font-size:13px;color:var(--dim)">
+  实现上 eval 复用了 <code>_run_one_group</code>，所以 Agent/沙箱/转换路径与训练<b>完全一致</b>——
+  这是让 eval 数字可信的前提（同一条代码路径，只是调度契约不同）。
+  <code>SKIP_EVAL_BEFORE_TRAIN=1</code> 跳过训练前基线；<code>train_async.py:54-60</code> 里还有一个
+  <code>validate_baseline_eval_gate</code> 闸门，可在基线不达标时直接拦住整个 run。
+</p>
+</section>
+
+<section id="s8">
+<h2><span class="num">8</span>显存模型与三类真实失败模式</h2>
+<p class="lead">
+  这个脚本约三分之一的篇幅在讲显存。原因是 122B MoE + 两个模型共卡 + 单条 33k~64k token 不可切分样本，
+  三者叠加后显存是<b>硬约束</b>而不是调参项。
+</p>
+
+<h3>校准过的显存模型（脚本 L141-164）</h3>
+<pre>static/GPU = (P_ep/PP/(EP·ETP) + P_gdn/PP + P_tp/PP/TP) × 6 B        <span class="c"># bf16 权重 + fp32 梯度</span>
+           + P_ep×12/(PP·EP·ETP·EDP) + (P_gdn+P_tp)×12/(PP·DP)       <span class="c"># adam m,v,master</span>
+activ/GPU  ≈ (L/PP)×(T/TP)×h×2 + 2 × max(GDN_peak(T), MoE_peak(T/TP))
+overhead   ≈ 7 GB                                                    <span class="c"># 碎片 4.33 + NCCL/ctx + memory_saver 余量</span>
+
+P_ep = 116.0B（专家）   P_gdn = 2.94B（TP 复制）   P_tp = 2.92B（可 TP 切分）
+GDN 激活实测 ≈ 330 KiB/token（<span class="k">不是</span>原先假设的 80 KiB —— 4× 误差正是早期预测系统性偏低的原因）
+
+<span class="c"># 在崩掉的配置上验证（TP2 PP2 DP8 EP16, 32 训练卡）：</span>
+<span class="c">#   预测 @40k token 样本 = 90.5 GB   vs   实测 90.56 GB   ← 对上了</span>
+<span class="c">#   预测 @64k token 样本 = 96.7 GB   →    超过 95 GB      ← 解释了 OOM</span></pre>
+
+<div class="tblwrap">
+<table>
+<thead><tr><th>TOPOLOGY</th><th class="m">train/infer</th><th class="m">TP×PP×CP⇒DP</th><th class="m">L/stage</th><th class="m">batch</th><th>定位</th></tr></thead>
+<tbody>
+<tr><td class="m">56（历史）</td><td class="m">32 / 24</td><td class="m">2×2×1⇒8</td><td class="m">24</td><td class="m">128</td><td style="color:var(--sync)">在 rollout_id 2 的 critic GDN 前向 OOM（peak 100.3 &gt; 95）</td></tr>
+<tr><td class="m">72</td><td class="m">48 / 24</td><td class="m">2×3×1⇒8</td><td class="m">16</td><td class="m">128</td><td>+20.7 GB 余量，CP1 基线</td></tr>
+<tr><td class="m">72cp2-64tr</td><td class="m">64 / 8</td><td class="m">2×4×2⇒4</td><td class="m">12</td><td class="m">256</td><td>最大余量（约 +21 GB），但只 1 个推理引擎 ⇒ rollout 慢 3×</td></tr>
+<tr><td class="m">88cp2</td><td class="m">64 / 24</td><td class="m">2×4×2⇒4</td><td class="m">12</td><td class="m">256</td><td style="color:var(--rollout)"><b>主力配置</b>：3 引擎把 rollout 从 58.9 → 19.6 min，step 约 60 → 23 min</td></tr>
+<tr><td class="m">88cp4-84k</td><td class="m">64 / 24</td><td class="m">2×4×4⇒2</td><td class="m">12</td><td class="m">256</td><td>84k 上下文墙（CP2 在 84k 下最后一级 100.3 GB 会 OOM）</td></tr>
+<tr><td class="m">88cp8-128k</td><td class="m">64 / 24</td><td class="m">2×4×8⇒1</td><td class="m">12</td><td class="m">128</td><td style="color:var(--buffer)">128k 唯一合法解，但 DP=1 ⇒ 无法均衡长尾，慎用</td></tr>
+</tbody>
+</table>
+</div>
+<div class="note">
+  <b>约束链</b>：TP×PP×CP 整除训练卡数 · EP×ETP 整除 TP×CP×DP · 48 层整除 PP ·
+  layers/stage 是 <code>full_attention_interval=4</code> 的倍数（否则 [lin,lin,lin,full] 模式跨 stage 切不齐，
+  因为 <code>qwen3_5.py:225-232</code> 按<b>全局</b>层号选注意力类型）· <code>GLOBAL_BATCH_SIZE % DP == 0</code>。
+  这些全部在启动前秒级校验。
+</div>
+
+<h3>三类真实踩过的失败模式</h3>
+<div class="flow">
+  <div class="fnode" style="--c:var(--sync)">
+    <div class="fh">失败 1 · critic GDN 前向 OOM<span class="badge">已修复</span></div>
+    <div class="fd">
+      <code>fla/ops/common/chunk_delta_h.py:493  v_new = torch.empty_like(u)` → 分配 632 MiB 失败，进程已占 90.56/95 GiB。</code>
+    </div>
+    <ul>
+      <li><b>为什么 <code>--max-tokens-per-gpu</code> 救不了</b>：<code>first_fit_pack</code> 的文档明确写着
+          「超大样本独占一个 bin，bin 和等于它自身长度」。样本<b>不可切分</b>，
+          一个 40k token 的样本无论 cap 设多小都会自己占一个 micro-batch。
+          这就是把 8192 降到 4096 <b>没用</b>（只是让 micro-batch 数翻倍、更慢）的原因。</li>
+      <li><b>真正的解</b>：(a) 加训练卡降专家优化器项（唯一有效的杠杆）；(b) 提 PP 降 layers/stage，
+          对<b>所有</b>样本包括超大样本都生效；(c) CP=2 把 GDN 激活砍半。</li>
+    </ul>
+  </div>
+
+  <div class="fnode" style="--c:var(--buffer)">
+    <div class="fh">失败 2 · Triton 冷编译风暴导致 NCCL watchdog 击杀<span class="badge">CP&gt;1 专属</span></div>
+    <div class="fd">2026-08-11，<b>既不是死锁也不是 OOM</b>。critic 的 per-microbatch 耗时呈 489s → 216s → 128s → 88s → ~22s 的典型 JIT 预热曲线。</div>
+    <ul>
+      <li><b>机制</b>：变长终端轨迹（min ~800、max 35855 token）+ 动态装箱 + <code>pad_size = TP×128 = 256</code>
+          ⇒ 每步约 <b>60 种不同的 padded thd 形状</b>，每种新形状触发一次 GDN/Triton 编译（数十至数百秒）。CP=2 让 per-rank 长度减半，形状种类<b>又翻倍</b>。</li>
+      <li><b>为什么日志是「15 个超时 + 1 个静默 rank」</b>：rank 30 卡在 &gt;30 分钟的编译里，
+          它的 15 个 EP 同伴早已进入 MoE all-to-all 并触发 30 分钟 watchdog；
+          rank 30 因为压根没走到那个 collective，自己反而没超时。</li>
+      <li><b>三件套修复</b>：<code>DATA_PAD_SIZE_MULTIPLIER=2048</code>（把 60 种形状收敛成几种）+
+          <code>TRITON_CACHE_DIR</code> 指向节点本地 <code>/root</code>（跨 step / 跨 actor-critic 切换 / 跨进程重启都命中，且不像共享 fs 那样跨节点抢锁）+
+          NCCL 建组超时抬到 120 分钟（编译是<b>合法工作</b>，不该被当成 hang）。</li>
+    </ul>
+  </div>
+
+  <div class="fnode" style="--c:var(--critic)">
+    <div class="fh">失败 3 · 两个"看起来很对"的优化其实是致命的<span class="badge">反直觉</span></div>
+    <ul>
+      <li><b><code>expandable_segments:True</code></b>：崩溃日志里写着「4.33 GiB reserved but unallocated」，
+          看起来正是碎片问题的教科书解法。但 <code>torch_memory_saver/entrypoint.py:199</code> 的
+          <code>_sanity_checks()</code> 会直接 raise——而 PPO 强制 <code>offload_train=True</code>，
+          <code>actor.py:76-78</code> 必然会设 <code>memory_margin_bytes</code> 触发这个检查。
+          结果：<b>job 在加载 checkpoint 之前就死了</b>。所以只能留 <code>max_split_size_mb:256</code>，
+          碎片问题改用「降低每 stage 占用」来解。</li>
+      <li><b>降低 EP</b>：直觉上 EP 小一点每卡专家参数就少一点。但优化器分片因子同比例变化、精确抵消，
+          <code>专家优化器字节/卡 = P_exp × 12 / 训练总卡数</code> 完全与 EP 无关。
+          降 EP 只会让 per-rank 专家<b>权重+梯度翻倍</b>（6 B/param）而优化器项一分不减。⇒ EP 必须保持最大。</li>
+      <li><b><code>SGLANG_MEM_FRACTION_STATIC</code> 用默认 0.75</b>：会把约 71 GB 锁进 KV 静态池，
+          FLA 长序列临时张量（<code>l2norm_fwd_kernel</code>、<code>chunk_delta_h</code>）随后撑爆剩余空间——
+          这是在纯推理节点上<b>实测到的崩溃</b>。0.6 的代价只是 KV 池小、排队多（吞吐损失），
+          用吞吐换不崩。</li>
+    </ul>
+  </div>
+</div>
+</section>
+
+<section id="s9">
+<h2><span class="num">9</span>源码索引：想改什么就去哪</h2>
+
+<h3>启动与配置</h3>
+<div class="tblwrap">
+<table>
+<thead><tr><th>文件</th><th>行数</th><th>职责</th></tr></thead>
+<tbody>
+<tr><td class="m">examples/harbor_terminal_rl/run_tmax15k_122b_a10b_scalable_ppo_criticlr30x_strongest.sh</td><td class="m">733</td><td>本次 run 的配方：TOPOLOGY 预设、PPO 超参、显存策略、前置校验</td></tr>
+<tr><td class="m">examples/harbor_terminal_rl/run_qwen35_9b_terminal_bench2_64h20.sh</td><td class="m">829</td><td>通用启动器：Ray 集群、8 组参数数组组装、<code>ray job submit</code></td></tr>
+<tr><td class="m">examples/harbor_terminal_rl/harbor_tmax15k_72gpu_..._cp2_bs256_evaltimeout10800.yaml</td><td class="m">90</td><td>Agent/沙箱/并发/超时/任务池路径</td></tr>
+<tr><td class="m">examples/harbor_terminal_rl/megatron_roles_tmax15k_criticlr30x_actorlr2x.yaml</td><td class="m">45</td><td>per-role lr 覆盖（唯一覆盖 lr / min_lr）</td></tr>
+<tr><td class="m">scripts/models/qwen3.5-122B-A10B.sh</td><td class="m">58</td><td>模型形状：48 层 / hidden 3072 / 256 experts / topk 8 / vocab 248320 / GDN</td></tr>
+<tr><td class="m">slime/utils/arguments.py</td><td class="m">~1900</td><td>三大参数族合并、YAML 覆盖、PPO 强制派生（<code>use_critic</code> / <code>offload_train</code>）</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>slime 核心（不要为 Harbor 需求改这里）</h3>
+<div class="tblwrap">
+<table>
+<thead><tr><th>文件</th><th>关键符号</th><th>职责</th></tr></thead>
+<tbody>
+<tr><td class="m">train_async.py</td><td class="m">train()</td><td>异步主循环：generate N+1 与 train N 重叠</td></tr>
+<tr><td class="m">train.py</td><td class="m">train()</td><td>同步版本（支持 colocate），本次未用</td></tr>
+<tr><td class="m">slime/ray/placement_group.py</td><td class="m">create_placement_groups<br>create_training_models</td><td>88 卡切分；<code>result["critic"] = result["actor"]</code>（L135）</td></tr>
+<tr><td class="m">slime/ray/rollout.py</td><td class="m">RolloutManager.generate<br>_convert_samples_to_train_data<br>_split_train_data_by_dp</td><td>rollout 调度入口；Sample→训练 dict；DP 切分 + <code>ray.put</code></td></tr>
+<tr><td class="m">slime/ray/actor_group.py</td><td class="m">RayTrainGroup.async_train</td><td>向 64 个训练 actor 广播 train.remote()</td></tr>
+<tr><td class="m">slime/backends/megatron_utils/actor.py</td><td class="m">train / train_critic<br>train_actor / update_weights</td><td>训练侧全部编排：wake/sleep、前向、GAE、反向、权重同步</td></tr>
+<tr><td class="m">slime/utils/dp_schedule.py</td><td class="m">build_dp_schedule</td><td>按组切 step → 装箱 → 补齐 → KK 均衡</td></tr>
+<tr><td class="m">slime/utils/seqlen_balancing.py</td><td class="m">first_fit_pack<br>karmarkar_karp</td><td>装箱与均衡分区（超大样本独占 bin 的语义就在这里）</td></tr>
+<tr><td class="m">slime/utils/ppo_utils.py</td><td class="m">compute_policy_loss<br>vanilla_gae / chunked_gae<br>get_grpo_returns 等</td><td>所有 advantage estimator 与 PPO 损失的数学</td></tr>
+<tr><td class="m">slime/backends/megatron_utils/loss.py</td><td class="m">compute_advantages_and_returns<br>policy_loss_function<br>value_loss_function</td><td>estimator 分派、策略/价值损失、explained_variance</td></tr>
+<tr><td class="m">.../update_weight/update_weight_from_distributed.py</td><td class="m">update_weights<br>_iter_expert_chunks</td><td>pause→flush→分桶→NCCL bcast→continue</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>Harbor 插件（改这里）</h3>
+<div class="tblwrap">
+<table>
+<thead><tr><th>文件</th><th>关键符号</th><th>职责</th></tr></thead>
+<tbody>
+<tr><td class="m">slime_plugins/harbor/rollout.py</td><td class="m">generate_rollout<br>_generate_rollout_async<br>_generate_eval_async<br>_build_trial_config</td><td>过采样/砍尾调度、试验分发、trial config 拼装、指标收集</td></tr>
+<tr><td class="m">slime_plugins/harbor/data_source.py</td><td class="m">HarborTaskDataSource</td><td>扫 task.toml、训练/eval 双游标、requeue 队列</td></tr>
+<tr><td class="m">slime_plugins/harbor/agent.py</td><td class="m">SlimeTerminus2</td><td>Terminus2 子类，支持 <code>llm_backend='slime_sglang'</code></td></tr>
+<tr><td class="m">slime_plugins/harbor/llm.py</td><td class="m">call()</td><td>SGLang <code>/generate</code> 客户端：token id 进、logprob 出、上下文守卫</td></tr>
+<tr><td class="m">slime_plugins/harbor/atif_adapter.py</td><td class="m">samples_from_trial_result<br>_normalized_trajectory_samples_from_detail</td><td><b>轨迹→Sample 的全部逻辑</b>：衔接策略判定、chunk 切分、loss_mask、group_id</td></tr>
+<tr><td class="m">slime_plugins/harbor/sample_postprocess.py</td><td class="m">cap_total_tokens_allow_response_trim_*</td><td>token 硬顶裁剪（sample 级 + rollout_data 级）</td></tr>
+<tr><td class="m">slime_plugins/harbor/train_loss.py</td><td class="m">policy_loss_no_entropy_when_disabled</td><td>entropy_coef=0 时省掉带梯度熵图，但仍 no_grad 记录熵</td></tr>
+<tr><td class="m">slime_plugins/harbor/partial_reward.py</td><td class="m">trajectory_grouped_progress_rewards</td><td>CTRF 部分进度奖励（本次未启用）</td></tr>
+<tr><td class="m">slime_plugins/harbor/trial_worker.py</td><td class="m">TrialWorker.run_trial</td><td>每节点一个的 0-GPU Ray actor，承载 Agent 的 asyncio 负载</td></tr>
+<tr><td class="m">slime_plugins/harbor/singularity_env.py</td><td class="m">SlimeSingularityEnvironment</td><td>Apptainer 沙箱后端（Daytona 的替代）</td></tr>
+<tr><td class="m">slime_plugins/harbor/eval_gate.py</td><td class="m">validate_baseline_eval_gate</td><td>基线 eval 不达标时拦住整个 run</td></tr>
+</tbody>
+</table>
+</div>
+
+<h3>运行时该盯哪些信号</h3>
+<div class="grid g2">
+<div class="card">
+<b>日志里的里程碑（脚本自带的 watch 命令）</b>
+<pre style="margin:8px 0 0"><span class="c"># 5 × "server is fired up" → 3 × "loaded checkpoint" → rollout → perf 0</span>
+grep -ac <span class="s">'successfully loaded checkpoint'</span> "$L"   <span class="c"># 3 = actor+critic 都载入</span>
+grep -aoE <span class="s">'perf [0-9]+:'</span> "$L" | tail -3          <span class="c"># rollout 进度</span>
+grep -ac <span class="s">'Timer update_weights end'</span> "$L"         <span class="c"># 已完成的训练步数</span>
+grep -acE <span class="s">'CUDA out of memory|torch.OutOfMemoryError'</span> "$L"   <span class="c"># 必须保持 0</span></pre>
+<div class="warn" style="margin-bottom:0">
+  <b>要盯的是 rollout_id 2</b>：<code>NUM_CRITIC_ONLY_STEPS=2</code> 意味着 step 0/1 只训 critic，
+  <b>rollout_id 2 才是首个 actor+critic 联合步</b>——正是历史上 OOM 的那一步。
+  过了它才算真正验证通过。
+</div>
+</div>
+<div class="card">
+<b>W&amp;B 指标优先级</b>
+<table>
+<tr><td class="m">train/explained_variance</td><td>critic 健康度<b>第一指标</b>；由负转正才说明 value head 学到了东西</td></tr>
+<tr><td class="m">eval/harbor</td><td>TB2 pass@3 通过率——最终目标</td></tr>
+<tr><td class="m">harbor/reward_mean</td><td>训练池平均奖励；历史上正是它长期平坦才把问题定位到<b>数据</b>而非 critic/lr</td></tr>
+<tr><td class="m">train/pg_clipfrac</td><td>clip 触发比例；持续过高说明步子太大</td></tr>
+<tr><td class="m">train/entropy_loss</td><td>虽然 coef=0，熵崩塌是策略退化的首要征兆</td></tr>
+<tr><td class="m">harbor/num_partial_tail_trials_cancelled</td><td>砍掉的慢尾数量，反映 batch 偏置程度</td></tr>
+<tr><td class="m">harbor/train_context_trimmed_ratio</td><td>被 65536 硬顶裁掉的样本比例，过高说明上下文墙偏紧</td></tr>
+<tr><td class="m">harbor/status_*_ratio</td><td>COMPLETED / TRUNCATED / FAILED 分布，反映沙箱与超时健康度</td></tr>
+</table>
+</div>
+</div>
+
+<div class="note">
+  <b>脚本里记录的一条重要历史结论</b>（<code>megatron_roles_...yaml</code> 注释）：
+  在 27B + synth-2820 上试过 critic lr 10× 与 20×、oversampling 288 与 260 的组合，
+  <code>explained_variance</code> 从 −39 拉到 +0.11 证明<b>critic 学得很好很快</b>，
+  但 rollout reward 五个 epoch 始终平坦。结论是「瓶颈 100% 在数据，不在 critic/lr/采样」。
+  这个 run 换掉数据（synth-2820 → tmax-15k 的 14601 个任务）就是为了打破那个奖励天花板——
+  <b>并且同时把 critic lr 推到 30×、actor lr 推到 2×</b>。
+</div>
+</section>
+
+</main>
+
+<footer>
+  <p><b>生成说明</b>：本文档由 Claude Code 通过阅读 slime-terminal-RL 仓库源码生成，
+  主线为 <code>examples/harbor_terminal_rl/run_tmax15k_122b_a10b_scalable_ppo_criticlr30x_strongest.sh</code>。
+  所有并行度、超参、显存数字与失败模式均取自仓库内的脚本注释、YAML 配置与源码实现，
+  未做任何推测性补充；标注了行号的位置可直接跳转核对。</p>
+  <p style="margin-top:8px">相关文档：<code>HARBOR_TERMINAL_RL_EXPLAINED_zh.md</code> ·
+  <code>MoE_adaptation.md</code> · <code>claude_sessions/2026-08-06_122b_a10b_oom_topology_investigation_zh.md</code> ·
+  <code>examples/harbor_terminal_rl/README.md</code> · <code>CLAUDE.md</code></p>
+</footer>
+
+</body>
+</html>

@@ -1,0 +1,53 @@
+# Megatron per-role config for the 27B dense PPO 256k run #2 (warm critic).
+#
+# WHY THIS FILE EXISTS (vs megatron_roles_tmax15k_criticlr30x_actorlr2x.yaml)
+# Run #1 used the tmax15k file, whose per-role block sets ONLY lr/min_lr. Run #2
+# needs three more per-role knobs, and two of them must differ between actor and
+# critic -- which a single top-level CLI flag cannot express:
+#
+#   1. critic value_clip  -- run #1 measured critic-value_clipfrac == 0.000 at EVERY
+#      logged step while critic-grad_norm ran 198..2193 and value_loss 2.0..86.2.
+#      A clipfrac of exactly 0 with a loss that large means the value head was NOT
+#      being held back by the 0.2 value clip in the usual sense; the clip is on the
+#      value DELTA (loss.py:1183 `|values - old_values| > value_clip`), and with a
+#      warm critic whose predictions already sit in the right range this term
+#      starts to bind as soon as the reward SCALE changes under it. This run changes
+#      the divisor 20 -> 82/per-family, so `returns` shrink ~4x while the loaded
+#      value head still predicts on the OLD scale: the very first updates need a
+#      LARGE value delta to re-calibrate, and a 0.2 clip would throttle exactly
+#      that. Raised to 4.0 so re-calibration is not truncated. Actor is untouched.
+#
+#   2. critic clip_grad -- the top-level default is 1.0 (arguments.py:819), and run
+#      #1's critic hit grad_norm 2193 / 1122 / 738, i.e. the critic's gradient was
+#      being scaled down by up to ~2000x before the optimizer saw it. That is the
+#      dominant reason the value head needed ~9 steps to become useful
+#      (explained_variance -38.2 -> +0.02). With the warm head we WANT it to move,
+#      so the critic's clip is raised to 100.0. The ACTOR keeps clip_grad 1.0 --
+#      its grad_norm was 0.25..5.2, well inside 1.0, and loosening it would risk
+#      the policy, which is the thing we are trying not to destabilise.
+#
+#   3. lr -- 30x ratio as requested, expressed as critic 1.5e-5 / actor 5e-7.
+#      The 30x is critic:actor (1.5e-5 / 5e-7 = 30). NOTE this differs from the
+#      tmax15k file, which raised the actor to 1.0e-6 and therefore ran a critic:actor
+#      ratio of 15 while calling itself "30x" (30x was relative to the canonical
+#      5e-7 baseline, not to its own actor lr). Here the ratio is literal.
+#
+# Everything else is deepcopy-inherited per role (_apply_megatron_role_overrides
+# only setattr's the listed keys).
+
+megatron:
+  - name: q38-27b-actor
+    role: actor
+    overrides:
+      lr: 1.0e-7        # kxm long-reward run: actor lr = 1/5 of prior 5.0e-7
+      min_lr: 1.0e-7
+      # clip_grad deliberately NOT overridden -> inherits the top-level 1.0.
+      # value_clip is meaningless for the actor (no value head).
+
+  - name: q38-27b-critic
+    role: critic
+    overrides:
+      lr: 1.5e-5        # critic UNCHANGED (only actor lr was cut); ratio is now 150x actor
+      min_lr: 1.5e-5
+      value_clip: 4.0   # was 0.2; see (1) above -- allow re-calibration to the new reward scale
+      clip_grad: 100.0  # was 1.0; see (2) above -- let the warm value head actually update

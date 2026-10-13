@@ -1,0 +1,331 @@
+"""TB-GAE: Turn-Boundary Skip-Observation GAE for multi-turn terminal agents.
+
+WHY
+---
+`slime/utils/ppo_utils.py::get_advantages_and_returns_batch` recurses over EVERY
+response position and never reads `loss_masks`. Measured on this project's own
+rollouts (dump 9, 300 chunks): **62.9% of response tokens are observation**
+(`loss_mask == 0`) -- shell stdout, compiler noise, test logs. Standard GAE forces
+the critic to regress a value for each of them and spends the lambda horizon
+crossing them.
+
+TB-GAE connects consecutive ACTION tokens directly and applies the discount only
+at turn boundaries, so the credit horizon is measured in decisions, not in
+characters of log output.
+
+THE INVARIANT THAT MAKES THIS SAFE TO SHIP
+------------------------------------------
+At gamma_turn = lambda_turn = 1.0 and reward placed only on the last action token
+of the episode, TB-GAE's `returns` must equal standard GAE's `returns` on the
+action positions, to float tolerance. Both telescope to `R - V(s_j)`. Any
+mismatch is an indexing/mask bug, not a modelling difference.
+`selftest_invariance()` at the bottom asserts exactly this; run it before use.
+
+WHY NOT lambda = 0.95
+---------------------
+0.95 over a 50-turn episode leaves 0.95**50 = 7.7% weight on the terminal reward,
+i.e. the outcome signal is effectively erased for early turns. This project's
+eval data shows the flip tasks are the LONG ones, so a short horizon is exactly
+backwards. Use {0.995, 0.999, 1.0} and nothing smaller.
+"""
+
+from __future__ import annotations
+
+from typing import Tuple
+
+import torch
+
+
+def compute_tb_gae(
+    values: torch.Tensor,          # [B, T] critic output over the response span
+    rewards: torch.Tensor,         # [B, T] sparse; non-zero only on turn-end tokens
+    action_mask: torch.Tensor,     # [B, T] bool: model-generated action tokens
+    turn_end_mask: torch.Tensor,   # [B, T] bool: last action token of each turn
+    is_real_done: torch.Tensor,    # [B, T] bool: true environment termination only
+    gamma_turn: float = 0.999,
+    lambda_turn: float = 0.999,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Vectorised over the batch; the recursion itself is sequential (it must be).
+
+    Returns (advantages, returns), both [B, T], **zero on non-action positions**.
+    Observation tokens get no advantage and no value target, which is the point.
+
+    Shapes are validated rather than assumed: a silent shape mismatch here would
+    corrupt the policy gradient in a way that is very hard to spot downstream.
+    """
+    if values.dim() != 2:
+        raise ValueError(f"values must be [B, T], got {tuple(values.shape)}")
+    for name, t in (("rewards", rewards), ("action_mask", action_mask),
+                    ("turn_end_mask", turn_end_mask), ("is_real_done", is_real_done)):
+        if t.shape != values.shape:
+            raise ValueError(f"{name} shape {tuple(t.shape)} != values {tuple(values.shape)}")
+    if not (0.0 < gamma_turn <= 1.0) or not (0.0 < lambda_turn <= 1.0):
+        raise ValueError("gamma_turn / lambda_turn must be in (0, 1]")
+
+    B, T = values.shape
+    advantages = torch.zeros_like(values)
+    returns = torch.zeros_like(values)
+
+    # fp32 accumulation: a 50-turn bf16 reverse scan loses meaningful precision,
+    # and the invariance test below is tighter than bf16 can hold.
+    acc_dtype = torch.float32 if values.dtype in (torch.bfloat16, torch.float16) else values.dtype
+
+    for b in range(B):
+        idx = torch.nonzero(action_mask[b], as_tuple=True)[0]
+        n = idx.numel()
+        if n == 0:
+            continue
+
+        v = values[b, idx].to(acc_dtype)
+        r = rewards[b, idx].to(acc_dtype)
+        te = turn_end_mask[b, idx].bool()
+        dn = is_real_done[b, idx].bool()
+
+        adv = torch.zeros(n, dtype=acc_dtype, device=values.device)
+        last = torch.zeros((), dtype=acc_dtype, device=values.device)
+
+        for j in range(n - 1, -1, -1):
+            # A turn boundary is "this action token ends a turn AND another action
+            # token follows" -- the discount belongs to the *transition*. The final
+            # action token of the episode has no successor, so it never discounts.
+            crossing = bool(te[j]) and (j < n - 1)
+            g = gamma_turn if crossing else 1.0
+            lam = lambda_turn if crossing else 1.0
+
+            nonterm = 0.0 if bool(dn[j]) else 1.0
+            next_v = v[j + 1] if j < n - 1 else torch.zeros((), dtype=acc_dtype, device=values.device)
+
+            delta = r[j] + g * nonterm * next_v - v[j]
+            last = delta + g * lam * nonterm * last
+            adv[j] = last
+
+        advantages[b, idx] = adv.to(values.dtype)
+        returns[b, idx] = (adv + v).to(values.dtype)
+
+    return advantages, returns
+
+
+# ---------------------------------------------------------------------------
+# Context-Parallel (CP=4) wrapper
+# ---------------------------------------------------------------------------
+def compute_tb_gae_cp(
+    values_shard: torch.Tensor,
+    rewards_shard: torch.Tensor,
+    action_mask_shard: torch.Tensor,
+    turn_end_mask_shard: torch.Tensor,
+    is_real_done_shard: torch.Tensor,
+    *,
+    total_lengths: list[int],
+    response_lengths: list[int],
+    gamma_turn: float = 0.999,
+    lambda_turn: float = 0.999,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Gather -> full-sequence TB-GAE -> re-shard.
+
+    CP=4 splits each sequence across 4 ranks with Megatron's **zigzag** layout, so
+    a rank's local slice is NOT a contiguous window. The reverse recursion is
+    inherently sequential in global sequence order, so it cannot be done on
+    shards: we must gather, recurse once on the full sequence, then scatter back.
+
+    This reuses slime's own `all_gather_with_cp` / `get_logits_and_tokens_offset_with_cp`
+    so the zigzag convention is honoured rather than re-derived here -- re-deriving
+    it is precisely how off-by-one shard bugs get introduced.
+    """
+    from megatron.core import mpu
+
+    from slime.backends.megatron_utils.cp_utils import (
+        all_gather_with_cp,
+        get_logits_and_tokens_offset_with_cp,
+    )
+
+    cp_size = mpu.get_context_parallel_world_size()
+    if cp_size == 1:
+        return compute_tb_gae(
+            values_shard, rewards_shard, action_mask_shard,
+            turn_end_mask_shard, is_real_done_shard,
+            gamma_turn=gamma_turn, lambda_turn=lambda_turn,
+        )
+
+    B = values_shard.shape[0]
+    full_v, full_r, full_a, full_te, full_d = [], [], [], [], []
+    for i in range(B):
+        tl, rl = total_lengths[i], response_lengths[i]
+        full_v.append(all_gather_with_cp(values_shard[i], tl, rl))
+        full_r.append(all_gather_with_cp(rewards_shard[i], tl, rl))
+        full_a.append(all_gather_with_cp(action_mask_shard[i].to(values_shard.dtype), tl, rl))
+        full_te.append(all_gather_with_cp(turn_end_mask_shard[i].to(values_shard.dtype), tl, rl))
+        full_d.append(all_gather_with_cp(is_real_done_shard[i].to(values_shard.dtype), tl, rl))
+
+    max_len = max(t.numel() for t in full_v)
+    def _pad(seq):
+        out = torch.zeros(B, max_len, dtype=values_shard.dtype, device=values_shard.device)
+        for i, t in enumerate(seq):
+            out[i, : t.numel()] = t
+        return out
+
+    adv_full, ret_full = compute_tb_gae(
+        _pad(full_v), _pad(full_r),
+        _pad(full_a).bool(), _pad(full_te).bool(), _pad(full_d).bool(),
+        gamma_turn=gamma_turn, lambda_turn=lambda_turn,
+    )
+
+    # scatter back to this rank's zigzag slice
+    adv_shard = torch.zeros_like(values_shard)
+    ret_shard = torch.zeros_like(values_shard)
+    for i in range(B):
+        tl, rl = total_lengths[i], response_lengths[i]
+        (s0, e0), (s1, e1) = get_logits_and_tokens_offset_with_cp(tl, rl)[1]
+        prompt = tl - rl
+        chunks_a, chunks_r = [], []
+        for s, e in ((s0, e0), (s1, e1)):
+            if e > s:
+                chunks_a.append(adv_full[i, max(0, s - prompt) : max(0, e - prompt)])
+                chunks_r.append(ret_full[i, max(0, s - prompt) : max(0, e - prompt)])
+        if chunks_a:
+            a = torch.cat(chunks_a)
+            r = torch.cat(chunks_r)
+            k = min(a.numel(), adv_shard.shape[1])
+            adv_shard[i, :k] = a[:k]
+            ret_shard[i, :k] = r[:k]
+    return adv_shard, ret_shard
+
+
+# ---------------------------------------------------------------------------
+# slime custom-advantage entry point
+# ---------------------------------------------------------------------------
+def tb_gae_advantage(args, rollout_data: dict) -> None:
+    """Wire into `--custom-advantage-function-path`.
+
+    Populates rollout_data["advantages"] / ["returns"] in place.
+
+    REQUIRES `turn_end_mask` and `is_real_done` in rollout_data. They do not exist
+    in the pipeline today -- `_split_train_data_by_dp` does not forward them (the
+    same gap that drops `metadata`). Until that plumbing lands this function
+    raises rather than silently guessing turn boundaries, because a wrong boundary
+    silently mis-assigns credit and would look like a modelling result.
+    """
+    values = rollout_data.get("values")
+    rewards = rollout_data.get("rewards")
+    loss_masks = rollout_data.get("loss_masks")
+    if values is None:
+        return  # not the last pipeline stage
+    te = rollout_data.get("turn_end_mask")
+    done = rollout_data.get("is_real_done")
+    if te is None or done is None:
+        raise RuntimeError(
+            "TB-GAE needs per-token `turn_end_mask` and `is_real_done`. They are "
+            "not forwarded by slime/ray/rollout.py::_split_train_data_by_dp yet -- "
+            "see TB4_REWARD_TBGAE_PATCH.md 'TB-GAE plumbing' before enabling this."
+        )
+
+    gamma = float(getattr(args, "tb_gae_gamma_turn", 0.999))
+    lam = float(getattr(args, "tb_gae_lambda_turn", 0.999))
+
+    advs, rets = [], []
+    for i in range(len(values)):
+        v = values[i].unsqueeze(0)
+        r = rewards[i].unsqueeze(0) if torch.is_tensor(rewards[i]) else torch.zeros_like(v)
+        am = loss_masks[i].bool().unsqueeze(0)
+        a, ret = compute_tb_gae(
+            v, r, am, te[i].bool().unsqueeze(0), done[i].bool().unsqueeze(0),
+            gamma_turn=gamma, lambda_turn=lam,
+        )
+        advs.append(a.squeeze(0))
+        rets.append(ret.squeeze(0))
+    rollout_data["advantages"] = advs
+    rollout_data["returns"] = rets
+
+
+# ---------------------------------------------------------------------------
+# the invariance negative control -- run this before trusting anything above
+# ---------------------------------------------------------------------------
+def _standard_gae(rewards, values, gamma=1.0, lambd=1.0):
+    """Mirror of slime's vanilla_gae, for the equivalence check."""
+    B, T = rewards.shape
+    last = torch.zeros(B, dtype=rewards.dtype, device=rewards.device)
+    rev = []
+    for t in reversed(range(T)):
+        nv = values[:, t + 1] if t < T - 1 else 0.0
+        delta = rewards[:, t] + gamma * nv - values[:, t]
+        last = delta + gamma * lambd * last
+        rev.append(last)
+    adv = torch.stack(rev[::-1], dim=1)
+    return adv, adv + values
+
+
+def selftest_invariance(verbose: bool = True) -> bool:
+    """At gamma=lambda=1 with an all-action mask, TB-GAE == standard GAE.
+
+    Also checks that with observations interleaved, `returns` on action tokens
+    still equal `R - V + V = R` (pure telescoping), which is the property that
+    proves the skip is doing what it claims.
+    """
+    torch.manual_seed(0)
+    ok = True
+
+    # (1) all-action, no observations -> must match standard GAE exactly
+    B, T = 3, 40
+    v = torch.randn(B, T)
+    r = torch.zeros(B, T)
+    r[:, -1] = torch.tensor([1.0, 0.3, 0.0])
+    am = torch.ones(B, T, dtype=torch.bool)
+    te = torch.zeros(B, T, dtype=torch.bool)
+    dn = torch.zeros(B, T, dtype=torch.bool)
+    a1, g1 = compute_tb_gae(v, r, am, te, dn, gamma_turn=1.0, lambda_turn=1.0)
+    a2, g2 = _standard_gae(r, v, 1.0, 1.0)
+    d_adv = (a1 - a2).abs().max().item()
+    d_ret = (g1 - g2).abs().max().item()
+    if verbose:
+        print(f"[1] all-action vs standard GAE: max|dadv|={d_adv:.2e} max|dret|={d_ret:.2e}")
+    ok &= d_adv < 1e-3 and d_ret < 1e-3
+
+    # (2) interleaved observations: returns on action tokens must equal the
+    #     episode reward (telescoping), independent of the observation values.
+    B, T = 2, 60
+    v = torch.randn(B, T) * 3.0
+    am = torch.zeros(B, T, dtype=torch.bool)
+    te = torch.zeros(B, T, dtype=torch.bool)
+    for b in range(B):
+        # 6 turns of 4 action tokens, each followed by 6 observation tokens
+        pos = 0
+        for _ in range(6):
+            for k in range(4):
+                am[b, pos] = True
+                if k == 3:
+                    te[b, pos] = True
+                pos += 1
+            pos += 6
+    r = torch.zeros(B, T)
+    lastact = [torch.nonzero(am[b])[-1].item() for b in range(B)]
+    R = [1.0, 0.25]
+    for b in range(B):
+        r[b, lastact[b]] = R[b]
+    dn = torch.zeros(B, T, dtype=torch.bool)
+    _, ret = compute_tb_gae(v, r, am, te, dn, gamma_turn=1.0, lambda_turn=1.0)
+    worst = 0.0
+    for b in range(B):
+        got = ret[b][am[b]]
+        worst = max(worst, (got - R[b]).abs().max().item())
+    if verbose:
+        print(f"[2] telescoping with observations skipped: max|returns - R|={worst:.2e}")
+    ok &= worst < 1e-3
+
+    # (3) observation tokens must receive exactly zero
+    adv, ret = compute_tb_gae(v, r, am, te, dn, gamma_turn=0.999, lambda_turn=0.999)
+    obs_adv = adv[~am].abs().max().item()
+    obs_ret = ret[~am].abs().max().item()
+    if verbose:
+        print(f"[3] observation positions zeroed: max|adv|={obs_adv:.2e} max|ret|={obs_ret:.2e}")
+    ok &= obs_adv == 0.0 and obs_ret == 0.0
+
+    # (4) horizon sanity: 0.95 would crush a 50-turn episode; 0.999 must not
+    for lam in (0.95, 0.99, 0.999, 1.0):
+        print(f"[4] lambda_turn={lam}: weight on terminal reward after 50 turns = {lam ** 50:.4f}")
+
+    if verbose:
+        print("PASS" if ok else "FAIL")
+    return ok
+
+
+if __name__ == "__main__":
+    raise SystemExit(0 if selftest_invariance() else 1)

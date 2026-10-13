@@ -1,0 +1,413 @@
+{
+  "case_root": "/path/to/workspace/slime_harbor_v030_case_study/cases/no_summary_step",
+  "rollout_dump_dir": "/path/to/workspace/slime_harbor_v030_case_study/run/no_summary_step_gbs4_rbs2_train2/rollout_dumps",
+  "train_data_dir": "/path/to/workspace/slime_harbor_v030_case_study/train_data/no_summary_step_gbs4_rbs2_trainonly_rankdump",
+  "num_rollout_samples": 8,
+  "num_train_records": 8,
+  "cases": [
+    {
+      "case_dir": "/path/to/workspace/slime_harbor_v030_case_study/cases/no_summary_step/rollout_1/g0000_s0000_i0",
+      "mode": "step",
+      "reward": 0.0,
+      "status": "completed",
+      "num_rollout_details": 1,
+      "details": [
+        {
+          "detail_index": 0,
+          "num_turns": 2,
+          "prompt_lengths": [
+            1283,
+            1508
+          ],
+          "completion_lengths": [
+            158,
+            110
+          ],
+          "raw_output_tokens": 268,
+          "prefix_mismatch_turns": null,
+          "base_changed_turns": [],
+          "prefix_drift_turns": [],
+          "context_tail_lengths": [],
+          "stitch_strategies": [],
+          "stitched_context_lengths": [],
+          "stitched_response_len": null,
+          "stitched_loss_mask_sum": null,
+          "stitched_zero_spans": [],
+          "v030_response_len": null,
+          "v030_loss_mask_sum": null,
+          "v030_zero_spans": []
+        }
+      ],
+      "sample_checks": [
+        {
+          "sample_index": 0,
+          "sample_mode": "step",
+          "detail_index": 0,
+          "step_index": 0,
+          "case_response_length": 158,
+          "case_loss_mask_sum": 158,
+          "case_zero_spans": [],
+          "raw_prompt_length": 1283,
+          "raw_completion_length": 158,
+          "sample_prompt_matches_raw": true,
+          "sample_response_matches_raw": true,
+          "rollout_found": true,
+          "rollout_response_length": 158,
+          "rollout_loss_mask_sum": 158,
+          "train_found": true,
+          "train_response_length": 158,
+          "train_loss_mask_sum": 158,
+          "train_group_id": 1000000000000,
+          "train_group_mask_sum": 268.0,
+          "train_zero_spans": [],
+          "train_tokens_match_case": true,
+          "train_loss_mask_match_case": true
+        },
+        {
+          "sample_index": 1,
+          "sample_mode": "step",
+          "detail_index": 0,
+          "step_index": 1,
+          "case_response_length": 110,
+          "case_loss_mask_sum": 110,
+          "case_zero_spans": [],
+          "raw_prompt_length": 1508,
+          "raw_completion_length": 110,
+          "sample_prompt_matches_raw": true,
+          "sample_response_matches_raw": true,
+          "rollout_found": true,
+          "rollout_response_length": 110,
+          "rollout_loss_mask_sum": 110,
+          "train_found": true,
+          "train_response_length": 110,
+          "train_loss_mask_sum": 110,
+          "train_group_id": 1000000000000,
+          "train_group_mask_sum": 268.0,
+          "train_zero_spans": [],
+          "train_tokens_match_case": true,
+          "train_loss_mask_match_case": true
+        }
+      ],
+      "trajectory_files": [
+        {
+          "path": "raw_trial/agent/trajectory.json",
+          "steps": 3,
+          "session_id": "4d718f49-5257-4a40-929d-8b9c72398d04",
+          "continued_trajectory_ref": null,
+          "continuation_index": null,
+          "source_counts": {
+            "user": 1,
+            "agent": 2
+          },
+          "copied_steps": 0,
+          "llm_call_steps": 0,
+          "subagent_ref_count": 0,
+          "subagent_refs": []
+        }
+      ]
+    },
+    {
+      "case_dir": "/path/to/workspace/slime_harbor_v030_case_study/cases/no_summary_step/rollout_1/g0000_s0001_i1",
+      "mode": "step",
+      "reward": 0.0,
+      "status": "completed",
+      "num_rollout_details": 1,
+      "details": [
+        {
+          "detail_index": 0,
+          "num_turns": 2,
+          "prompt_lengths": [
+            1283,
+            5411
+          ],
+          "completion_lengths": [
+            183,
+            114
+          ],
+          "raw_output_tokens": 297,
+          "prefix_mismatch_turns": null,
+          "base_changed_turns": [],
+          "prefix_drift_turns": [],
+          "context_tail_lengths": [],
+          "stitch_strategies": [],
+          "stitched_context_lengths": [],
+          "stitched_response_len": null,
+          "stitched_loss_mask_sum": null,
+          "stitched_zero_spans": [],
+          "v030_response_len": null,
+          "v030_loss_mask_sum": null,
+          "v030_zero_spans": []
+        }
+      ],
+      "sample_checks": [
+        {
+          "sample_index": 1000000,
+          "sample_mode": "step",
+          "detail_index": 0,
+          "step_index": 0,
+          "case_response_length": 183,
+          "case_loss_mask_sum": 183,
+          "case_zero_spans": [],
+          "raw_prompt_length": 1283,
+          "raw_completion_length": 183,
+          "sample_prompt_matches_raw": true,
+          "sample_response_matches_raw": true,
+          "rollout_found": true,
+          "rollout_response_length": 183,
+          "rollout_loss_mask_sum": 183,
+          "train_found": true,
+          "train_response_length": 183,
+          "train_loss_mask_sum": 183,
+          "train_group_id": 1000000010000,
+          "train_group_mask_sum": 297.0,
+          "train_zero_spans": [],
+          "train_tokens_match_case": true,
+          "train_loss_mask_match_case": true
+        },
+        {
+          "sample_index": 1000001,
+          "sample_mode": "step",
+          "detail_index": 0,
+          "step_index": 1,
+          "case_response_length": 114,
+          "case_loss_mask_sum": 114,
+          "case_zero_spans": [],
+          "raw_prompt_length": 5411,
+          "raw_completion_length": 114,
+          "sample_prompt_matches_raw": true,
+          "sample_response_matches_raw": true,
+          "rollout_found": true,
+          "rollout_response_length": 114,
+          "rollout_loss_mask_sum": 114,
+          "train_found": true,
+          "train_response_length": 114,
+          "train_loss_mask_sum": 114,
+          "train_group_id": 1000000010000,
+          "train_group_mask_sum": 297.0,
+          "train_zero_spans": [],
+          "train_tokens_match_case": true,
+          "train_loss_mask_match_case": true
+        }
+      ],
+      "trajectory_files": [
+        {
+          "path": "raw_trial/agent/trajectory.json",
+          "steps": 3,
+          "session_id": "02c47507-1cc9-4560-8ea9-bdeb0d8c70fb",
+          "continued_trajectory_ref": null,
+          "continuation_index": null,
+          "source_counts": {
+            "user": 1,
+            "agent": 2
+          },
+          "copied_steps": 0,
+          "llm_call_steps": 0,
+          "subagent_ref_count": 0,
+          "subagent_refs": []
+        }
+      ]
+    },
+    {
+      "case_dir": "/path/to/workspace/slime_harbor_v030_case_study/cases/no_summary_step/rollout_1/g0001_s0000_i2",
+      "mode": "step",
+      "reward": 0.0,
+      "status": "completed",
+      "num_rollout_details": 1,
+      "details": [
+        {
+          "detail_index": 0,
+          "num_turns": 2,
+          "prompt_lengths": [
+            1283,
+            1482
+          ],
+          "completion_lengths": [
+            166,
+            119
+          ],
+          "raw_output_tokens": 285,
+          "prefix_mismatch_turns": null,
+          "base_changed_turns": [],
+          "prefix_drift_turns": [],
+          "context_tail_lengths": [],
+          "stitch_strategies": [],
+          "stitched_context_lengths": [],
+          "stitched_response_len": null,
+          "stitched_loss_mask_sum": null,
+          "stitched_zero_spans": [],
+          "v030_response_len": null,
+          "v030_loss_mask_sum": null,
+          "v030_zero_spans": []
+        }
+      ],
+      "sample_checks": [
+        {
+          "sample_index": 2000000,
+          "sample_mode": "step",
+          "detail_index": 0,
+          "step_index": 0,
+          "case_response_length": 166,
+          "case_loss_mask_sum": 166,
+          "case_zero_spans": [],
+          "raw_prompt_length": 1283,
+          "raw_completion_length": 166,
+          "sample_prompt_matches_raw": true,
+          "sample_response_matches_raw": true,
+          "rollout_found": true,
+          "rollout_response_length": 166,
+          "rollout_loss_mask_sum": 166,
+          "train_found": true,
+          "train_response_length": 166,
+          "train_loss_mask_sum": 166,
+          "train_group_id": 1000100000000,
+          "train_group_mask_sum": 285.0,
+          "train_zero_spans": [],
+          "train_tokens_match_case": true,
+          "train_loss_mask_match_case": true
+        },
+        {
+          "sample_index": 2000001,
+          "sample_mode": "step",
+          "detail_index": 0,
+          "step_index": 1,
+          "case_response_length": 119,
+          "case_loss_mask_sum": 119,
+          "case_zero_spans": [],
+          "raw_prompt_length": 1482,
+          "raw_completion_length": 119,
+          "sample_prompt_matches_raw": true,
+          "sample_response_matches_raw": true,
+          "rollout_found": true,
+          "rollout_response_length": 119,
+          "rollout_loss_mask_sum": 119,
+          "train_found": true,
+          "train_response_length": 119,
+          "train_loss_mask_sum": 119,
+          "train_group_id": 1000100000000,
+          "train_group_mask_sum": 285.0,
+          "train_zero_spans": [],
+          "train_tokens_match_case": true,
+          "train_loss_mask_match_case": true
+        }
+      ],
+      "trajectory_files": [
+        {
+          "path": "raw_trial/agent/trajectory.json",
+          "steps": 3,
+          "session_id": "d8677b90-1ad4-4748-9906-882c345590ae",
+          "continued_trajectory_ref": null,
+          "continuation_index": null,
+          "source_counts": {
+            "user": 1,
+            "agent": 2
+          },
+          "copied_steps": 0,
+          "llm_call_steps": 0,
+          "subagent_ref_count": 0,
+          "subagent_refs": []
+        }
+      ]
+    },
+    {
+      "case_dir": "/path/to/workspace/slime_harbor_v030_case_study/cases/no_summary_step/rollout_1/g0001_s0001_i3",
+      "mode": "step",
+      "reward": 0.0,
+      "status": "completed",
+      "num_rollout_details": 1,
+      "details": [
+        {
+          "detail_index": 0,
+          "num_turns": 2,
+          "prompt_lengths": [
+            1283,
+            5361
+          ],
+          "completion_lengths": [
+            232,
+            104
+          ],
+          "raw_output_tokens": 336,
+          "prefix_mismatch_turns": null,
+          "base_changed_turns": [],
+          "prefix_drift_turns": [],
+          "context_tail_lengths": [],
+          "stitch_strategies": [],
+          "stitched_context_lengths": [],
+          "stitched_response_len": null,
+          "stitched_loss_mask_sum": null,
+          "stitched_zero_spans": [],
+          "v030_response_len": null,
+          "v030_loss_mask_sum": null,
+          "v030_zero_spans": []
+        }
+      ],
+      "sample_checks": [
+        {
+          "sample_index": 3000000,
+          "sample_mode": "step",
+          "detail_index": 0,
+          "step_index": 0,
+          "case_response_length": 232,
+          "case_loss_mask_sum": 232,
+          "case_zero_spans": [],
+          "raw_prompt_length": 1283,
+          "raw_completion_length": 232,
+          "sample_prompt_matches_raw": true,
+          "sample_response_matches_raw": true,
+          "rollout_found": true,
+          "rollout_response_length": 232,
+          "rollout_loss_mask_sum": 232,
+          "train_found": true,
+          "train_response_length": 232,
+          "train_loss_mask_sum": 232,
+          "train_group_id": 1000100010000,
+          "train_group_mask_sum": 336.0,
+          "train_zero_spans": [],
+          "train_tokens_match_case": true,
+          "train_loss_mask_match_case": true
+        },
+        {
+          "sample_index": 3000001,
+          "sample_mode": "step",
+          "detail_index": 0,
+          "step_index": 1,
+          "case_response_length": 104,
+          "case_loss_mask_sum": 104,
+          "case_zero_spans": [],
+          "raw_prompt_length": 5361,
+          "raw_completion_length": 104,
+          "sample_prompt_matches_raw": true,
+          "sample_response_matches_raw": true,
+          "rollout_found": true,
+          "rollout_response_length": 104,
+          "rollout_loss_mask_sum": 104,
+          "train_found": true,
+          "train_response_length": 104,
+          "train_loss_mask_sum": 104,
+          "train_group_id": 1000100010000,
+          "train_group_mask_sum": 336.0,
+          "train_zero_spans": [],
+          "train_tokens_match_case": true,
+          "train_loss_mask_match_case": true
+        }
+      ],
+      "trajectory_files": [
+        {
+          "path": "raw_trial/agent/trajectory.json",
+          "steps": 3,
+          "session_id": "99d89e20-98f2-4973-a293-7a5518a5e399",
+          "continued_trajectory_ref": null,
+          "continuation_index": null,
+          "source_counts": {
+            "user": 1,
+            "agent": 2
+          },
+          "copied_steps": 0,
+          "llm_call_steps": 0,
+          "subagent_ref_count": 0,
+          "subagent_refs": []
+        }
+      ]
+    }
+  ]
+}

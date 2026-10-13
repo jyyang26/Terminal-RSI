@@ -1,0 +1,145 @@
+# synth-3k config: 2820 synthesized terminal tasks on Daytona, 96/120-GPU Qwen3.5-27B
+# fully-async. PPO (actor-critic + GAE), raw mode, KL OFF, no rollout-logprobs.
+# Used by run_synth3k_2820_96gpu_27b_daytona_ppo_partial_64k_fully_async.sh.
+#
+# >>DATASET (2026-07-06): switches the training pool to the 2820-task synth_tasks
+# corpus (terminalworld_task_rewrite/unified_datasets/synth_tasks_2820_20260706).
+# This is a REAL training run:
+#   - TRAIN pool = synth-2820 (2820 tasks), n=1 (each task rolled out ONCE).
+#   - EVAL pool  = the 89 Terminal-Bench 2 tasks (held-out generalization).
+#
+# >>DATA LOCATION (DIFFERENT from tmax-15k): the train pool is a SHARED-FS directory
+# of 2820 SYMLINKS to task dirs (each has task.toml / instruction.md / tests/ /
+# solution/ / environment/Dockerfile). Path.glob("*/task.toml") resolves symlinks
+# and matched all 2820 (verified). NO node-local /tmp staging is needed — every
+# node reads the same shared-fs path directly (unlike tmax-15k's 14601-task tar).
+#
+# >>PROCESS REWARD (the point of this run): each task's tests/test.sh runs
+#   pytest --ctrf /logs/verifier/ctrf.json ...
+# which writes a CTRF json with PER-TEST passed/failed. partial_reward.py parses
+# passed/total from that CTRF and gives a capped partial reward for trials that
+# did not fully pass. HARBOR_PARTIAL_REWARD_MAX=1.0 (set in the wrapper) makes the
+# partial reward a PURE pass-ratio: shaped = max(terminal, 1.0 * passed/total).
+# Full pass -> reward 1.0 (terminal dominates); partial pass -> passed/total.
+#
+# >>SANDBOX RESOURCES (2026-07-06): trimmed to 1 CPU / 2 GB RAM / 6 GB disk via
+# environment override_* kwargs (Harbor base._maybe_override_task_env_config forces
+# these onto every task's task.toml; daytona.py maps memory_mb//1024 GB,
+# storage_mb//1024 GB). This shrinks Daytona footprint per sandbox.
+#
+# >>CRITIC WARM-LOAD: the actor cold-starts from the 27B base (release ckpt ->
+# start_rollout_id=0), but the critic warm-loads its trained value head from run
+# 20260703_001109 iter_56 via the load-root symlink <load>_critic (wired in the
+# wrapper: PRETRAINED_CKPT points at a load-root whose _critic sibling symlinks to
+# the 001109 critic). NUM_CRITIC_ONLY_STEPS=0 (no warmup — value head is trained).
+#
+# >>n=1 + length reward: length reward is a no-op at n=1; DISABLED (lambda=0 in the
+# wrapper). Advantage = PPO critic+GAE, so partial_reward returns raw shaped rewards
+# (no group normalization under ppo estimator).
+#
+# >>OVERSAMPLE: fly 280 concurrent groups, accept the first 256 completed, drop the
+# slow tail (rollout_batch_size=256, max_concurrent_groups=280). n=1 -> group==task.
+#
+# Window: 64k (the proven-safe full-length recipe), set by the wrapper's 5 walls.
+# Timeout patches: NCCL group 30min + Gloo barrier 60min (both crash fixes).
+
+# Training pool: the 2820-task synth corpus (shared-fs symlink dir). Each entry is
+# <dir>/<task_name>/task.toml (task_name is a symlink to the real task dir).
+# No offset/limit -> all 2820, consumed in sorted order, cycled across epochs.
+harbor_tasks_dir: /path/to/workspace/terminal_agent_sft_data/terminalworld_task_rewrite/unified_datasets/synth_tasks_2820_20260706_symlink/dataset
+harbor_tasks_glob: "*/task.toml"
+
+# Held-out EVAL pool: the 89 Terminal-Bench 2 tasks (shared fs, all nodes see it).
+# Independent cursor from training; iterated in full once per eval pass.
+harbor_eval_tasks_dir: /path/to/workspace/code/terminal-bench-2-main
+harbor_eval_tasks_glob: "*/task.toml"
+
+harbor_trial_defaults:
+  trials_dir: /path/to/workspace/slime_harbor_trials/synth3k_2820_ppo_partial_64k
+  timeout_multiplier: 1.0
+  agent:
+    import_path: slime_plugins.harbor.agent:SlimeTerminus2
+    model_name: slime-policy
+    override_timeout_sec: 3600
+    kwargs:
+      parser_name: json
+      max_turns: 60
+      collect_rollout_details: true
+      enable_summarize: true
+      proactive_summarization_threshold: 20000
+      trajectory_config:
+        raw_content: true
+        linear_history: true
+      record_terminal_session: false
+      llm_backend: slime_sglang
+      llm_kwargs:
+        apply_chat_template_kwargs:
+          enable_thinking: false
+        # 4th of 5 context walls: Terminus2 agent's own budget. 64k matches the
+        # proven full-length recipe; wrapper sets the other 4 walls to 65536.
+        max_context_tokens: 64000
+  verifier:
+    override_timeout_sec: 900
+  environment:
+    type: daytona
+    delete: true
+    # >>SANDBOX RESOURCE OVERRIDE (2026-07-06): force 1 CPU / 2 GB / 6 GB on every
+    # task regardless of its task.toml. Harbor base._maybe_override_task_env_config
+    # applies these; daytona Resources = cpu, memory_mb//1024 GB, storage_mb//1024 GB.
+    override_cpus: 1
+    override_memory_mb: 2048
+    override_storage_mb: 6144
+    kwargs:
+      connection_pool_maxsize: 128
+      # auto_stop (90min > 60min agent budget) + auto_delete (10min) backstop against
+      # leaked sandboxes whose stop() never ran. Healthy trials are deleted immediately.
+      auto_stop_interval_mins: 90
+      auto_delete_interval_mins: 10
+
+harbor_sample_mode: trajectory_retokenized
+harbor_group_unit: trajectory
+harbor_reward_key: reward
+
+# >>OVERSAMPLE 280 / TRAIN 256: n=1 means group==task==sandbox. Fly 280 concurrent
+# groups (max_concurrent_groups), accept first 256 (rollout_batch_size in wrapper),
+# drop the slow tail. num_concurrent_trials is the sandbox-level semaphore; keep it
+# at 280 so it never throttles the in-flight groups.
+# >>2026-07-07 撇油偏差修复（见 PPO_INTEGRATION_NOTES.md §11）：本 run 已切到
+# HARBOR_ROLLOUT_MODE=standard（在 wrapper 里设）。standard 模式**不读**下面的
+# harbor_fully_async_max_concurrent_groups——超采样窗口改由 OVER_SAMPLING_BATCH_SIZE=288
+# 控制（每步发288、收最先完成的256、cancel慢尾、不backfill；撇油比1.125×）。
+# 下面这行仅在回退 fully_async 时才生效，保留以便A/B。
+harbor_num_concurrent_trials: 280
+harbor_fully_async_max_concurrent_groups: 280
+harbor_partial_group_min_units: 1
+
+# >>DAYTONA CREATE RATE LIMIT: Daytona enforces a PER-ORG sandbox .create() limit of
+# 600/min (=10/s). Pace creates to 6/s (=360/min) so the 280-group burst at rollout
+# start doesn't exceed it. 0 = no limit.
+harbor_create_rate_per_sec: 6.0
+harbor_create_rate_burst: 6.0
+
+harbor_trial_node_spread: true
+# 7 rollout nodes (120-GPU topo). trials_per_node is a throughput hint (sandboxes run
+# remotely on Daytona, not on local GPUs), not a hard cap; 280/7=40 per node. Trial
+# workers are I/O-light (0.05 CPU, mostly waiting on remote Daytona).
+harbor_trials_per_node: 40
+harbor_trial_worker_num_cpus: 0.05
+harbor_trial_worker_startup_timeout_sec: 120
+harbor_trial_worker_healthcheck_timeout_sec: 30
+harbor_kill_unhealthy_trial_workers: false
+harbor_fallback_to_inprocess_trials: false
+harbor_trial_remote_timeout_sec: 5400
+
+# Coordinator-side TOTAL eval wall: bounds the entire TB2-89 eval gather; at the
+# deadline, pending eval tasks are cancelled and pass-rate is scored on what finished.
+harbor_eval_total_timeout_sec: 3600
+rollout_cleanup_function_path: slime_plugins.harbor.fully_async_rollout.cleanup_rollout
+harbor_fully_async_shutdown_drain_timeout_sec: 30
+harbor_fully_async_shutdown_join_timeout_sec: 45
+
+harbor_fail_on_conversion_error: true
+harbor_fail_on_trial_error: false
+harbor_require_full_rollout_groups: false
+harbor_rollout_group_attempt_multiplier: 12
+harbor_retry_missing_samples: 0

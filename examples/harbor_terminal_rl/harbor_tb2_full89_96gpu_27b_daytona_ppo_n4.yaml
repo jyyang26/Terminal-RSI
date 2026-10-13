@@ -1,0 +1,118 @@
+# n=4 FORMAL PPO config: Terminal-Bench 2 FULL 89 tasks on Daytona, 96-GPU
+# Qwen3.5-27B fully-async. PPO (actor-critic + GAE), raw mode, KL OFF, no
+# rollout-logprobs, LENGTH REWARD OFF. Used by
+# run_tb2_full89_96gpu_27b_daytona_ppo_n4_fully_async.sh.
+#
+# Successor to harbor_tb2_full89_96gpu_27b_daytona_ppo_lenreward_overfit.yaml (the
+# n=20 smoke). Differences (all concurrency/oversampling; the algorithm + reward are
+# set in the wrapper):
+#   - n=4 (wrapper N_SAMPLES_PER_PROMPT=4) instead of 20. PPO uses the critic's
+#     per-trajectory GAE baseline, so group-relative multi-sampling is redundant.
+#   - GROUP-LEVEL oversampling ONLY: partial_group_min_units=4 (= n, NO within-group
+#     tail-cancel -- all 4 trials of a prompt are collected) + max_concurrent_groups
+#     =24 (> the 64-prompt window's steady-state) so slow groups are overlapped by
+#     fast ones. This is the Daytona long-tail backstop without shrinking PPO's batch.
+#   - num_concurrent_trials=96 (24 groups x 4 trials) -- far below the smoke's 320,
+#     so cheaper and gentler on the Daytona account.
+#   - LENGTH REWARD OFF (wrapper clears CUSTOM_REWARD_POST_PROCESS_PATH) -> reward is
+#     the raw terminal binary checker. (harbor_reward_key: reward, unchanged.)
+#
+# GOAL: still an OVERFIT run (train pool == eval pool == the 89 TB2 tasks). With the
+# wrapper's 64-prompt batch this is ~1.4 steps/epoch; NUM_ROLLOUT=7 ~= 5 epochs.
+
+# Training pool == eval pool: the full Terminal-Bench 2 set (89 */task.toml).
+harbor_tasks_dir: /path/to/workspace/code/terminal-bench-2-main
+harbor_tasks_glob: "*/task.toml"
+
+# Held-out EVAL pool: the SAME 89 TB2 tasks (overfit run). Independent cursor.
+harbor_eval_tasks_dir: /path/to/workspace/code/terminal-bench-2-main
+harbor_eval_tasks_glob: "*/task.toml"
+
+harbor_trial_defaults:
+  trials_dir: /path/to/workspace/slime_harbor_trials/tb2_full89_overfit_ppo_n4
+  timeout_multiplier: 1.0
+  agent:
+    import_path: slime_plugins.harbor.agent:SlimeTerminus2
+    model_name: slime-policy
+    # Agent wall-clock budget: 3600s. Overrides each task.toml timeout_sec. Long
+    # tasks need it; truncated (timed-out) trajectories pass ~0% (see smoke header).
+    override_timeout_sec: 3600
+    kwargs:
+      parser_name: json
+      max_turns: 60
+      collect_rollout_details: true
+      enable_summarize: true
+      proactive_summarization_threshold: 20000
+      trajectory_config:
+        raw_content: true
+        linear_history: true
+      record_terminal_session: false
+      llm_backend: slime_sglang
+      llm_kwargs:
+        apply_chat_template_kwargs:
+          enable_thinking: false
+        max_context_tokens: 64000
+  # Verifier hard wall 900s (15min): bounds the trial at agent(<=3600s) +
+  # verifier(<=900s) + setup/teardown, comfortably under remote_timeout (5400s) and
+  # Daytona idle auto-delete. A verifier that blows the wall = failed trial (reward 0).
+  verifier:
+    override_timeout_sec: 900
+  environment:
+    type: daytona
+    delete: true
+    override_storage_mb: 10240
+    kwargs:
+      connection_pool_maxsize: 128
+      # Backstop against sandbox LEAKS (a stop() that never ran). Daytona's
+      # auto_delete clock only starts AFTER a sandbox is STOPPED, so auto_delete
+      # alone is inert while a leaked sandbox stays `started` forever (auto_stop
+      # defaults to 0 = never). MUST set both: leaked sandbox idle -> auto_stop 90min
+      # -> auto_delete 10min later. auto_stop (90) > agent wall (3600s=60min) so a
+      # live trial is never reaped mid-run. Healthy trials are deleted immediately by
+      # stop(); these knobs only catch leaks.
+      auto_stop_interval_mins: 90
+      auto_delete_interval_mins: 10
+
+harbor_sample_mode: trajectory_retokenized
+harbor_group_unit: trajectory
+harbor_reward_key: reward
+
+# n=4 per group, NO within-group tail-cancel (partial_group_min_units = n = 4, so a
+# group is accepted only when all 4 trajectories are in). GROUP-LEVEL oversampling:
+# 24 groups in flight (> the 64-prompt steady-state per step) lets fast groups cover
+# for slow ones -- the Daytona long-tail hedge. 24 groups x 4 trials = 96 concurrent
+# sandboxes (well within tier4 quota, ~960GiB << 5000GiB).
+harbor_num_concurrent_trials: 96
+harbor_fully_async_max_concurrent_groups: 24
+harbor_partial_group_min_units: 4
+
+harbor_trial_node_spread: true
+# 96 trials / 8 rollout nodes = 12 trial-worker actors/node.
+harbor_trials_per_node: 12
+harbor_trial_worker_num_cpus: 0.05
+harbor_trial_worker_startup_timeout_sec: 120
+harbor_trial_worker_healthcheck_timeout_sec: 30
+harbor_kill_unhealthy_trial_workers: false
+harbor_fallback_to_inprocess_trials: false
+# Per-trial coordinator wall 5400s (90min): above agent(3600)+verifier(900)+setup,
+# so a real slow trial isn't killed, but a lost-future stall self-heals in <=90min.
+harbor_trial_remote_timeout_sec: 5400
+
+# Total eval wall 3600s (60min): bounds the whole eval gather; at the deadline,
+# pending eval tasks are cancelled and pass-rate is scored on what finished.
+harbor_eval_total_timeout_sec: 3600
+rollout_cleanup_function_path: slime_plugins.harbor.fully_async_rollout.cleanup_rollout
+harbor_fully_async_shutdown_drain_timeout_sec: 30
+harbor_fully_async_shutdown_join_timeout_sec: 45
+
+harbor_fail_on_conversion_error: true
+harbor_fail_on_trial_error: false
+# With NO within-group tail-cancel (min_units = n = 4), a group needs all 4 units.
+# Allow accepting partial groups so a single failed/leaked trial doesn't force the
+# group to be retried/dropped (>= partial_group_min_units would be 4, i.e. full, so
+# this mainly governs the require-full path -- keep false to train on what we get).
+harbor_require_full_rollout_groups: false
+# Retry headroom for group attempts so transient Daytona create failures don't
+# exhaust the budget before enough groups complete.
+harbor_rollout_group_attempt_multiplier: 12
+harbor_retry_missing_samples: 0

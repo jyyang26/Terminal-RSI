@@ -1,0 +1,489 @@
+from __future__ import annotations
+
+from collections.abc import Mapping, Sequence
+from typing import Any
+
+import httpx
+
+from slime_plugins.harbor.import_utils import ensure_harbor_distribution_metadata
+from slime_plugins.harbor.routing_replay import make_routed_experts_extra
+
+
+class SlimeSGLangLLM:
+    """Harbor BaseLLM implementation backed by slime's SGLang /generate endpoint."""
+
+    def __init__(
+        self,
+        *,
+        model_name: str,
+        hf_checkpoint: str,
+        router_url: str,
+        temperature: float | None = None,
+        top_p: float = 1.0,
+        top_k: int = -1,
+        min_p: float = 0.0,
+        presence_penalty: float = 0.0,
+        repetition_penalty: float = 1.0,
+        max_new_tokens: int = 1024,
+        stop: list[str] | str | None = None,
+        stop_token_ids: list[int] | None = None,
+        max_context_tokens: int | None = None,
+        apply_chat_template_kwargs: dict[str, Any] | None = None,
+        chat_template_kwargs: dict[str, Any] | None = None,
+        add_generation_prompt: bool = True,
+        record_rollout_text: bool = False,
+        use_rollout_routing_replay: bool = False,
+        num_layers: int | None = None,
+        moe_router_topk: int | None = None,
+        timeout_sec: float = 600.0,
+        score_centering_top_k: int | None = None,
+        score_centering_wire_format: str = "binary",
+        score_centering_max_response_bytes: int = 268435456,
+        score_centering_max_trial_bytes: int = 536870912,
+        **_: Any,
+    ):
+        ensure_harbor_distribution_metadata()
+        from harbor.llms.base import BaseLLM
+
+        if not issubclass(type(self), BaseLLM):
+            # This class intentionally avoids importing Harbor at module import time.
+            # The dynamic base check keeps construction errors readable if Harbor is absent.
+            pass
+        self._model_name = model_name
+        self._router_url = router_url.rstrip("/")
+        self._temperature = temperature
+        self._top_p = top_p
+        self._top_k = top_k
+        self._min_p = min_p
+        self._presence_penalty = presence_penalty
+        self._repetition_penalty = repetition_penalty
+        self._max_new_tokens = max_new_tokens
+        self._stop = stop
+        self._stop_token_ids = stop_token_ids
+        self._max_context_tokens = max_context_tokens
+        self._apply_chat_template_kwargs = dict(apply_chat_template_kwargs or chat_template_kwargs or {})
+        self._add_generation_prompt = add_generation_prompt
+        self._record_rollout_text = bool(record_rollout_text)
+        self._use_rollout_routing_replay = bool(use_rollout_routing_replay)
+        self._num_layers = int(num_layers) if num_layers is not None else None
+        self._moe_router_topk = int(moe_router_topk) if moe_router_topk is not None else None
+        if self._use_rollout_routing_replay and (
+            self._num_layers is None
+            or self._num_layers <= 0
+            or self._moe_router_topk is None
+            or self._moe_router_topk <= 0
+        ):
+            raise ValueError(
+                "use_rollout_routing_replay requires positive num_layers and moe_router_topk in llm_kwargs"
+            )
+        self._timeout_sec = timeout_sec
+        if score_centering_top_k is not None:
+            if (
+                isinstance(score_centering_top_k, bool)
+                or not isinstance(score_centering_top_k, int)
+                or score_centering_top_k < 1
+            ):
+                raise ValueError("score_centering_top_k must be positive")
+            self._score_centering_top_k = score_centering_top_k
+            self._score_centering_wire_format = score_centering_wire_format
+            self._score_centering_max_response_bytes = score_centering_max_response_bytes
+            self._score_centering_max_trial_bytes = score_centering_max_trial_bytes
+            self._score_centering_reserved_bytes = 0
+        from slime.utils.processing_utils import load_tokenizer
+
+        self._tokenizer = load_tokenizer(hf_checkpoint, trust_remote_code=True)
+
+    async def call(self, prompt: str, **kwargs):
+        ensure_harbor_distribution_metadata()
+        from harbor.llms.base import ContextLengthExceededError, LLMResponse
+        from harbor.models.metric import UsageInfo
+
+        message_history = kwargs.get("message_history") or []
+        messages = [*message_history, {"role": "user", "content": prompt}]
+        prompt_token_ids = self._encode_messages(messages)
+
+        sampling_params = {
+            "temperature": self._temperature if self._temperature is not None else 1.0,
+            "top_p": self._top_p,
+            "top_k": self._top_k,
+            "min_p": self._min_p,
+            "presence_penalty": self._presence_penalty,
+            "repetition_penalty": self._repetition_penalty,
+            "max_new_tokens": kwargs.get("max_tokens") or kwargs.get("max_completion_tokens") or self._max_new_tokens,
+            "stop": self._stop,
+            "stop_token_ids": self._stop_token_ids,
+            "skip_special_tokens": True,
+            "no_stop_trim": True,
+            "spaces_between_special_tokens": False,
+        }
+
+        # Proactive context-limit guard. SGLang rejects (HTTP 400) when
+        # prompt_tokens + max_new_tokens exceeds the served context window. If we
+        # let that bubble up as a generic RuntimeError, Terminus2's fallback
+        # summarization (which only catches ContextLengthExceededError) never
+        # fires and the whole turn is lost. Detect it here using the SAME true
+        # token count SGLang would see, and raise the typed error so the agent
+        # can summarize/unwind and retry instead of failing the trial.
+        if self._max_context_tokens is not None:
+            max_new = int(sampling_params["max_new_tokens"] or 0)
+            if len(prompt_token_ids) + max_new > int(self._max_context_tokens):
+                raise ContextLengthExceededError(
+                    f"prompt_tokens ({len(prompt_token_ids)}) + max_new_tokens ({max_new}) "
+                    f"exceeds context limit ({self._max_context_tokens})"
+                )
+
+        payload = {
+            "input_ids": prompt_token_ids,
+            "sampling_params": sampling_params,
+            "return_logprob": True,
+        }
+        if hasattr(self, "_score_centering_top_k"):
+            from slime.utils.score_centering import score_centering_request
+
+            payload.update(
+                score_centering_request(
+                    k=self._score_centering_top_k,
+                    sampling_params=sampling_params,
+                    max_bytes=self._score_centering_max_response_bytes,
+                )
+            )
+            reserve = sampling_params["max_new_tokens"] * (8 * self._score_centering_top_k + 4)
+            if self._score_centering_reserved_bytes + reserve > self._score_centering_max_trial_bytes:
+                raise RuntimeError("SC trial head budget exceeded before generation")
+            # Reserve before the first await. Failed/cancelled calls conservatively keep their reservation.
+            self._score_centering_reserved_bytes += reserve
+        if self._use_rollout_routing_replay:
+            payload["return_routed_experts"] = True
+
+        async with httpx.AsyncClient(timeout=self._timeout_sec) as client:
+            response = await client.post(f"{self._router_url}/generate", json=payload)
+            try:
+                response.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                body = response.text[:2000]
+                # Backstop for the proactive guard above: if SGLang still reports a
+                # context-length rejection (e.g. our token estimate drifted from the
+                # server's), translate it to the typed error so fallback
+                # summarization can catch it rather than failing the trial.
+                if response.status_code == 400 and "maximum context length" in body.lower():
+                    raise ContextLengthExceededError(
+                        f"SGLang rejected prompt as too long: prompt_tokens={len(prompt_token_ids)}, "
+                        f"max_new_tokens={sampling_params['max_new_tokens']}, body={body}"
+                    ) from exc
+                raise RuntimeError(
+                    "SGLang /generate request failed "
+                    f"status={response.status_code}, prompt_tokens={len(prompt_token_ids)}, "
+                    f"max_new_tokens={sampling_params['max_new_tokens']}, body={body}"
+                ) from exc
+            output = response.json()
+
+        meta_info = output.get("meta_info") or {}
+        token_logprobs = meta_info.get("output_token_logprobs") or []
+        completion_token_ids = [int(item[1]) for item in token_logprobs]
+        logprobs = [float(item[0]) for item in token_logprobs]
+        content = output.get("text") or ""
+        extra = {"finish_reason": meta_info.get("finish_reason")}
+        if hasattr(self, "_score_centering_top_k"):
+            from slime.utils.score_centering import (
+                assert_sampled_logps,
+                decode_sampler_head,
+                encode_turn_head,
+            )
+
+            if not completion_token_ids:
+                raise RuntimeError("SC rejects empty LLM completions before Harbor loses turn alignment")
+            ids, head_logps, row_tokens = decode_sampler_head(
+                meta_info,
+                completion_token_ids,
+                k=self._score_centering_top_k,
+                wire_format=self._score_centering_wire_format,
+                max_bytes=self._score_centering_max_response_bytes,
+                vocab_size=len(self._tokenizer),
+            )
+            assert_sampled_logps(ids, head_logps, row_tokens, logprobs)
+            extra["score_centering_head"] = encode_turn_head(ids, head_logps, row_tokens, prompt_token_ids)
+        if self._use_rollout_routing_replay:
+            routed_experts = meta_info.get("routed_experts")
+            if not isinstance(routed_experts, str):
+                raise RuntimeError("SGLang /generate did not return meta_info['routed_experts'] for R3")
+            assert self._num_layers is not None
+            assert self._moe_router_topk is not None
+            extra.update(
+                make_routed_experts_extra(
+                    routed_experts,
+                    token_rows=len(prompt_token_ids) + len(completion_token_ids) - 1,
+                    num_layers=self._num_layers,
+                    moe_router_topk=self._moe_router_topk,
+                )
+            )
+        if self._record_rollout_text:
+            prompt_text = self._decode_token_ids(prompt_token_ids)
+            extra.update(
+                {
+                    "prompt_text": prompt_text,
+                    "completion_text": content,
+                    **self._last_assistant_history_projection(
+                        messages,
+                        prompt_token_ids,
+                        prompt_text=prompt_text,
+                    ),
+                }
+            )
+
+        return LLMResponse(
+            content=content,
+            model_name=self._model_name,
+            usage=UsageInfo(
+                prompt_tokens=len(prompt_token_ids),
+                completion_tokens=len(completion_token_ids),
+                cache_tokens=0,
+                cost_usd=0.0,
+            ),
+            prompt_token_ids=prompt_token_ids,
+            completion_token_ids=completion_token_ids,
+            logprobs=logprobs,
+            extra=extra,
+        )
+
+    def get_model_context_limit(self) -> int:
+        if self._max_context_tokens is not None:
+            return int(self._max_context_tokens)
+        return int(getattr(self._tokenizer, "model_max_length", 131072) or 131072)
+
+    def encode_bootstrap_state(self, prompt: str, *, message_history) -> list[int]:
+        """Encode the next decision state without making an SGLang request.
+
+        Uses exactly the same chat template/tokenizer as call(). The caller
+        records this after the last action/observation, not from action logits.
+        """
+        return self._encode_messages([*message_history, {"role": "user", "content": prompt}])
+
+    def get_model_output_limit(self) -> int | None:
+        return self._max_new_tokens
+
+    def count_message_tokens(self, messages: list[dict[str, Any]]) -> int:
+        """Count prompt tokens for ``messages`` using the SAME real tokenizer/chat
+        template that :meth:`call` feeds to SGLang.
+
+        Terminus2's default ``_count_total_tokens`` uses ``litellm.token_counter``,
+        which does not recognise our custom ``model_name`` (e.g. ``slime-policy``)
+        and silently falls back to a GPT ``cl100k`` tokenizer. That estimate
+        systematically *undercounts* the true Qwen token length (chat-template
+        role markers, special tokens, CJK), so the agent's context-budget math
+        (unwind / proactive-summarization thresholds) is computed against the
+        wrong number and the real prompt still overflows the served window.
+        Exposing the true count here lets Terminus2 unwind/summarize against the
+        same number the guard in :meth:`call` enforces.
+
+        Robustness: some chat templates (e.g. Qwen) raise when the message list
+        has no user turn (``[system]``, ``[system, assistant]`` — shapes the
+        unwind loop can transiently produce). The litellm counter tolerated
+        those, so we must too: fall back to per-message token-length estimation
+        (plus a small per-message envelope) rather than propagating a
+        ``TemplateError`` that would break the caller's budget loop.
+        """
+        if not messages:
+            return 0
+        try:
+            return len(self._encode_messages(list(messages)))
+        except Exception:
+            return self._estimate_message_tokens(messages)
+
+    def _estimate_message_tokens(self, messages: list[dict[str, Any]]) -> int:
+        """Fallback token count when the chat template can't render ``messages``.
+
+        Encodes each message's content with the real tokenizer (no chat
+        template) and adds a fixed per-message envelope for role markers, so the
+        estimate stays close to the true count and never collapses to zero.
+        """
+        per_message_envelope = 4
+        total = 0
+        for message in messages:
+            content = message.get("content")
+            if isinstance(content, str) and content:
+                total += len(self._tokenizer.encode(content, add_special_tokens=False))
+            total += per_message_envelope
+        return total
+
+    def _encode_messages(self, messages: list[dict[str, Any]]) -> list[int]:
+        if hasattr(self._tokenizer, "apply_chat_template"):
+            return _normalize_token_ids(
+                self._tokenizer.apply_chat_template(
+                    messages,
+                    tokenize=True,
+                    add_generation_prompt=self._add_generation_prompt,
+                    **self._apply_chat_template_kwargs,
+                )
+            )
+        text = "\n".join(f"{message.get('role', 'user')}: {message.get('content', '')}" for message in messages)
+        text += "\nassistant:"
+        return _normalize_token_ids(self._tokenizer.encode(text, add_special_tokens=False))
+
+    def _last_assistant_history_projection(
+        self,
+        messages: list[dict[str, Any]],
+        prompt_token_ids: list[int],
+        *,
+        prompt_text: str | None = None,
+    ) -> dict[str, Any]:
+        last_assistant_index = None
+        for index, message in enumerate(messages):
+            if message.get("role") == "assistant":
+                last_assistant_index = index
+        if last_assistant_index is None:
+            return {
+                "last_assistant_message_content": None,
+                "last_assistant_message_span": None,
+            }
+
+        message = messages[last_assistant_index]
+        content = str(message.get("content") or "")
+        span = self._message_token_span(
+            messages,
+            last_assistant_index,
+            prompt_token_ids,
+            content=content,
+            prompt_text=prompt_text,
+        )
+        return {
+            "last_assistant_message_content": content,
+            "last_assistant_message_span": span,
+        }
+
+    def _message_token_span(
+        self,
+        messages: list[dict[str, Any]],
+        message_index: int,
+        prompt_token_ids: list[int],
+        *,
+        content: str | None = None,
+        prompt_text: str | None = None,
+    ) -> list[int] | None:
+        span = self._message_token_span_from_prompt_text(prompt_token_ids, content, prompt_text)
+        if span is not None:
+            return span
+
+        if not hasattr(self._tokenizer, "apply_chat_template"):
+            return None
+        before = (
+            []
+            if message_index == 0
+            else _normalize_token_ids(
+                self._tokenizer.apply_chat_template(
+                    messages[:message_index],
+                    tokenize=True,
+                    add_generation_prompt=False,
+                    **self._apply_chat_template_kwargs,
+                )
+            )
+        )
+        through = _normalize_token_ids(
+            self._tokenizer.apply_chat_template(
+                messages[: message_index + 1],
+                tokenize=True,
+                add_generation_prompt=False,
+                **self._apply_chat_template_kwargs,
+            )
+        )
+        if prompt_token_ids[: len(before)] != before or prompt_token_ids[: len(through)] != through:
+            return None
+        return [len(before), len(through)]
+
+    def _message_token_span_from_prompt_text(
+        self,
+        prompt_token_ids: list[int],
+        content: str | None,
+        prompt_text: str | None,
+    ) -> list[int] | None:
+        if not content or not prompt_text or not callable(getattr(self._tokenizer, "__call__", None)):
+            return None
+        char_start = prompt_text.rfind(content)
+        if char_start < 0:
+            return None
+        char_end = char_start + len(content)
+
+        try:
+            tokenized = self._tokenizer(
+                prompt_text,
+                add_special_tokens=False,
+                return_offsets_mapping=True,
+            )
+            encoded_ids = _normalize_token_ids(tokenized)
+            offsets = _normalize_offset_mapping(tokenized)
+        except Exception:
+            return None
+
+        if encoded_ids != list(prompt_token_ids) or len(offsets) != len(encoded_ids):
+            return None
+
+        covered = [
+            index
+            for index, (offset_start, offset_end) in enumerate(offsets)
+            if offset_end > char_start and offset_start < char_end
+        ]
+        if not covered:
+            return None
+
+        token_start = covered[0]
+        token_end = covered[-1] + 1
+        if self._decode_token_ids(encoded_ids[token_start:token_end]) != content:
+            return None
+        return [token_start, token_end]
+
+    def _decode_token_ids(self, token_ids: list[int]) -> str:
+        if hasattr(self._tokenizer, "decode"):
+            return str(
+                self._tokenizer.decode(
+                    token_ids,
+                    skip_special_tokens=False,
+                    clean_up_tokenization_spaces=False,
+                )
+            )
+        return ""
+
+
+def _normalize_token_ids(tokenized: Any) -> list[int]:
+    """Return a flat ``list[int]`` from common tokenizer output shapes."""
+
+    if isinstance(tokenized, Mapping):
+        if "input_ids" not in tokenized:
+            raise TypeError(f"Tokenizer output mapping has no input_ids key: {list(tokenized.keys())}")
+        tokenized = tokenized["input_ids"]
+    elif hasattr(tokenized, "input_ids"):
+        tokenized = tokenized.input_ids
+
+    if hasattr(tokenized, "tolist"):
+        tokenized = tokenized.tolist()
+
+    if isinstance(tokenized, Sequence) and tokenized and isinstance(tokenized[0], Sequence):
+        if len(tokenized) != 1:
+            raise ValueError(f"Expected a single tokenizer sequence, got batch size {len(tokenized)}")
+        tokenized = tokenized[0]
+
+    try:
+        return [int(token_id) for token_id in tokenized]
+    except TypeError as exc:
+        raise TypeError(f"Tokenizer output is not iterable token ids: {type(tokenized)!r}") from exc
+
+
+def _normalize_offset_mapping(tokenized: Any) -> list[tuple[int, int]]:
+    if isinstance(tokenized, Mapping):
+        if "offset_mapping" not in tokenized:
+            raise TypeError(f"Tokenizer output mapping has no offset_mapping key: {list(tokenized.keys())}")
+        offsets = tokenized["offset_mapping"]
+    elif hasattr(tokenized, "offset_mapping"):
+        offsets = tokenized.offset_mapping
+    else:
+        raise TypeError(f"Tokenizer output has no offset_mapping: {type(tokenized)!r}")
+
+    if hasattr(offsets, "tolist"):
+        offsets = offsets.tolist()
+
+    if isinstance(offsets, Sequence) and offsets and isinstance(offsets[0], Sequence):
+        first = offsets[0]
+        if first and isinstance(first[0], Sequence):
+            if len(offsets) != 1:
+                raise ValueError(f"Expected a single offset sequence, got batch size {len(offsets)}")
+            offsets = first
+
+    return [(int(start), int(end)) for start, end in offsets]

@@ -1,0 +1,60 @@
+{
+  "date": "2026-09-26",
+  "scope": "offline_stage_1_2",
+  "passed_tests": 302,
+  "distributed_jobs": 2,
+  "failed": 0,
+  "skipped": 0,
+  "baseline_source": "/tmp/ppo-sc-stage12-46ux60iv/before",
+  "log_directory": "/tmp/ppo-sc-stage12-46ux60iv/final",
+  "suites": {
+    "math_args": {
+      "returncode": 0,
+      "passed": 104,
+      "skipped": 0,
+      "seconds": 15.72
+    },
+    "transport_roles": {
+      "returncode": 0,
+      "passed": 87,
+      "skipped": 0,
+      "seconds": 13.42
+    },
+    "loss_integration": {
+      "returncode": 0,
+      "passed": 23,
+      "skipped": 0,
+      "seconds": 30.68
+    },
+    "pipeline": {
+      "returncode": 0,
+      "passed": 4,
+      "skipped": 0,
+      "seconds": 18.19
+    },
+    "baseline_source": {
+      "returncode": 0,
+      "passed": 12,
+      "skipped": 0,
+      "seconds": 34.23
+    },
+    "existing_regressions": {
+      "returncode": 0,
+      "passed": 72,
+      "skipped": 0,
+      "seconds": 3.91
+    },
+    "tp2_cp2": {
+      "returncode": 0,
+      "passed": null,
+      "skipped": 0,
+      "seconds": 16.31
+    },
+    "tp1_cp4": {
+      "returncode": 0,
+      "passed": null,
+      "skipped": 0,
+      "seconds": 16.83
+    }
+  }
+}

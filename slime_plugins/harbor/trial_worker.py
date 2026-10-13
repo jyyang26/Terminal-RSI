@@ -1,0 +1,55 @@
+from __future__ import annotations
+
+import logging
+
+import ray
+
+from slime.utils.logging_utils import configure_logger
+
+logger = logging.getLogger(__name__)
+
+
+class HarborTrialWorker:
+    """Per-node worker that runs Harbor terminal trials on its Ray node."""
+
+    def __init__(self, args):
+        configure_logger()
+        self.args = args
+
+    async def run_trial(self, rollout_id, group_index, sample_rank, base_sample, *, evaluation_overrides=None):
+        from slime_plugins.harbor.rollout import _run_one_trial
+
+        node_ip = ray.util.get_node_ip_address()
+        logger.info(
+            "[HarborTrialWorker %s] running r%s g%s s%s",
+            node_ip,
+            rollout_id,
+            group_index,
+            sample_rank,
+        )
+        args = self.args
+        if evaluation_overrides is not None:
+            import copy
+
+            allowed = {
+                "enable_score_centering",
+                "harbor_trial_name_template",
+                "rollout_temperature",
+                "rollout_top_p",
+                "rollout_top_k",
+            }
+            if "enable_tb_gae" in evaluation_overrides:
+                allowed.add("enable_tb_gae")
+                if evaluation_overrides["enable_tb_gae"] is not False:
+                    raise ValueError("TB-GAE evaluation override must disable enable_tb_gae")
+            if set(evaluation_overrides) != allowed or evaluation_overrides["enable_score_centering"] is not False:
+                raise ValueError("Invalid SC evaluation override")
+            if "slime-eval-" not in evaluation_overrides["harbor_trial_name_template"]:
+                raise ValueError("SC evaluation requires its own trial namespace")
+            args = copy.copy(self.args)
+            for key, value in evaluation_overrides.items():
+                setattr(args, key, value)
+        return await _run_one_trial(args, rollout_id, group_index, sample_rank, base_sample)
+
+    def get_node_ip(self):
+        return ray.util.get_node_ip_address()

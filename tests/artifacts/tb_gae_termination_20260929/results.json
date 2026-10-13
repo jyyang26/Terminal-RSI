@@ -1,0 +1,71 @@
+{
+  "date": "2026-09-29",
+  "results": {
+    "smoke": {
+      "tests.test_tb_gae_termination_smoke": {
+        "tests": 36,
+        "seconds": 0.341,
+        "failures": 0,
+        "skipped": 0
+      },
+      "tests.test_harbor_atif_adapter": {
+        "tests": 18,
+        "seconds": 0.002,
+        "failures": 0,
+        "skipped": 0
+      },
+      "tests.test_harbor_sample_postprocess": {
+        "tests": 2,
+        "seconds": 0.0,
+        "failures": 0,
+        "skipped": 0
+      }
+    },
+    "math": {
+      "tests.test_tb_gae_math": {
+        "tests": 16,
+        "seconds": 0.094,
+        "failures": 0,
+        "skipped": 0
+      }
+    },
+    "harbor": {
+      "tests.unit.agents.terminus_2.test_terminus_2_mcp.TestMcpPromptInjection": {
+        "tests": 6,
+        "seconds": 0.001,
+        "failures": 0,
+        "skipped": 0
+      },
+      "tests.unit.agents.terminus_2.test_terminus_2_temperature": {
+        "tests": 4,
+        "seconds": 0.002,
+        "failures": 0,
+        "skipped": 0
+      },
+      "tests.unit.agents.terminus_2.test_tmux_session": {
+        "tests": 10,
+        "seconds": 0.087,
+        "failures": 0,
+        "skipped": 0
+      }
+    }
+  },
+  "total_passed": 92,
+  "math_deselected": 11,
+  "environment": {
+    "python": "3.13.13",
+    "torch": "2.10.0+cu128",
+    "pytest": "9.0.2",
+    "execution": "CPU; real Harbor agent and Trial execution; model and terminal I/O mocked; no cluster"
+  },
+  "source_sha256": {
+    "harbor/src/harbor/agents/terminus_2/terminus_2.py": "1b86aae64a2341d5a43455016a7a6807133f50d3279e624e15cc66166fe0774c",
+    "slime-terminal-RL/slime_plugins/harbor/tb_gae_termination.py": "48c5986d10b709d5d8b150b6c8b45671f2d848bb3ac40fa6b27d961c30988b3e",
+    "slime-terminal-RL/slime_plugins/harbor/rollout.py": "0cd5157174a24f681129848a6bab386a8ae5835296a5a0a8c71520f154bf56de",
+    "slime-terminal-RL/slime_plugins/harbor/trial_worker.py": "3681f487595f97ac17b1fc419926ff212a91decad823f1c01a5d678dc20557df",
+    "slime-terminal-RL/slime_plugins/harbor/tb_gae_data.py": "3241e0951fd3f202a471bf5a44acac74f8b756aec4267db1ec87add8f3fe2bf6",
+    "slime-terminal-RL/tests/test_tb_gae_termination_smoke.py": "cc4b5b1ec494d744a8762368ba4157bd7b47372fbf73203f152e23dccb5fc0a9"
+  },
+  "protected_script_config_count": 311,
+  "protected_files_changed": []
+}

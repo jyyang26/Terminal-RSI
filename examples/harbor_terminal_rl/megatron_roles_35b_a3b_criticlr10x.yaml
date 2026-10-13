@@ -1,0 +1,23 @@
+# Megatron per-role config for the 56-GPU Qwen3.5-35B-A3B PPO run.
+#
+# The PPO critic shares the actor's placement group (no extra GPUs) but has its own
+# optimizer. slime's parse_megatron_role_args() applies role=critic overrides to the
+# critic optimizer ONLY; the actor keeps the wrapper's top-level --lr (5e-7).
+#
+# The value head is randomly re-initialized at load (the LM backbone is loaded from
+# the same torch_dist as the actor, but output_size=1 != vocab, so
+# model.py:_reinitialize_critic_output_layer fires). A 10x critic LR (5e-6) lets the
+# value function calibrate faster than the slow actor. Consumed via MEGATRON_CONFIG_PATH.
+
+megatron:
+  - name: q35-35b-a3b-actor
+    role: actor
+    overrides:
+      lr: 5.0e-7
+      min_lr: 5.0e-7
+
+  - name: q35-35b-a3b-critic
+    role: critic
+    overrides:
+      lr: 5.0e-6
+      min_lr: 5.0e-6

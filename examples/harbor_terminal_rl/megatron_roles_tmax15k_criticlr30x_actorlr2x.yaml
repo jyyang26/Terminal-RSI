@@ -1,0 +1,45 @@
+# Megatron per-role config: critic lr = 30x canonical, actor lr = 2x canonical.
+# 2026-07-11 "strongest run" (Qwen3.6-27B + tmax-15k, standard mode, os260, 100 steps).
+#
+# WHY THIS FILE EXISTS
+# The 2026-07-10 Qwen3.6-27B synth-2820 rerun used critic lr = 20x (1.0e-5) with the
+# actor at the conservative canonical 5e-7. That PROVED cold-start critic + high critic
+# lr drives explained_variance from -39 to +0.11 (first positive step30, 40% faster than
+# 10x's step50) — the critic learns fine and fast. But rollout reward stayed FLAT across
+# BOTH 10x/20x and BOTH oversampling values (288/260): t~0, no uptrend over 5 epochs.
+# Conclusion locked: the reward bottleneck is 100% the DATA, not the critic/lr/sampling.
+#
+# THIS RUN changes the DATA (synth-2820 -> tmax-15k, 14601 tasks, far larger/more diverse)
+# to break the reward ceiling, and pushes the recipe harder:
+#   - critic lr 30x = 1.5e-5 (vs 20x's 1.0e-5): even faster value head; see if EV turns
+#     positive earlier / higher than 20x's step30 / +0.11.
+#   - actor lr 2x = 1.0e-6 (vs canonical 5e-7): with a well-calibrated critic (EV>0), a
+#     slightly bolder actor step can convert accurate advantages into real policy gains
+#     now that the data has headroom to improve.
+#
+# Nx is relative to the FIXED canonical actor baseline 5e-7 (10x=5e-6, 20x=1.0e-5,
+# 30x=1.5e-5), NOT relative to this run's raised actor lr — matches the historical
+# megatron_roles_synth3k_criticlr{10,20}x.yaml convention.
+#
+# slime wires this via --megatron-config-path: create_training_models() in
+# placement_group.py calls parse_megatron_role_args(role="actor") AND role="critic".
+# The actor override below REPLACES the wrapper's top-level --lr (5e-7) for the actor
+# optimizer; the critic override applies to the critic optimizer only. Both roles
+# deepcopy-inherit every other arg (_apply_megatron_role_overrides only setattr's the
+# listed keys — no coupled params touched).
+#
+# NOTE: --lr-decay-style is constant for both roles (wrapper sets it), so max_lr ==
+# effective lr throughout; min_lr is set equal to lr so there is no warmup/decay ramp.
+
+megatron:
+  - name: tmax15k-actor
+    role: actor
+    overrides:
+      lr: 1.0e-6      # 2x canonical 5e-7
+      min_lr: 1.0e-6
+
+  - name: tmax15k-critic
+    role: critic
+    overrides:
+      lr: 1.5e-5      # 30x canonical 5e-7
+      min_lr: 1.5e-5

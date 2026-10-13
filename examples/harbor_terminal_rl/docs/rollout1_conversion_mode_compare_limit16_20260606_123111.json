@@ -1,0 +1,2559 @@
+{
+  "chunk_count_hist": {
+    "3": 3,
+    "4": 1,
+    "5": 3,
+    "7": 4,
+    "8": 3,
+    "11": 1,
+    "23": 1
+  },
+  "converted_trials": 16,
+  "error_count": 0,
+  "errors": [],
+  "mode_stats": {
+    "trajectory": {
+      "loss_tokens": {
+        "max": 70451,
+        "mean": 47285.44,
+        "min": 22467,
+        "n": 16,
+        "over_128k": 0,
+        "over_64k": 1,
+        "p50": 47302,
+        "p90": 62993,
+        "p95": 65212,
+        "p99": 65212
+      },
+      "prompt_len": {
+        "max": 1283,
+        "mean": 1283.0,
+        "min": 1283,
+        "n": 16,
+        "over_128k": 0,
+        "over_64k": 0,
+        "p50": 1283,
+        "p90": 1283,
+        "p95": 1283,
+        "p99": 1283
+      },
+      "response_len": {
+        "max": 6794005,
+        "mean": 4504922.69,
+        "min": 1021401,
+        "n": 16,
+        "over_128k": 16,
+        "over_64k": 16,
+        "p50": 5114593,
+        "p90": 6104804,
+        "p95": 6473081,
+        "p99": 6473081
+      },
+      "samples": 16,
+      "total_len": {
+        "max": 6795288,
+        "mean": 4506205.69,
+        "min": 1022684,
+        "n": 16,
+        "over_128k": 16,
+        "over_64k": 16,
+        "p50": 5115876,
+        "p90": 6106087,
+        "p95": 6474364,
+        "p99": 6474364
+      },
+      "zero_mask_tokens": {
+        "max": 6723554,
+        "mean": 4457637.25,
+        "min": 998934,
+        "n": 16,
+        "over_128k": 16,
+        "over_64k": 16,
+        "p50": 5068477,
+        "p90": 6050889,
+        "p95": 6410088,
+        "p99": 6410088
+      }
+    },
+    "trajectory_normalized": {
+      "loss_tokens": {
+        "max": 39212,
+        "mean": 6636.55,
+        "min": 191,
+        "n": 114,
+        "over_128k": 0,
+        "over_64k": 0,
+        "p50": 3694,
+        "p90": 14303,
+        "p95": 18687,
+        "p99": 27619
+      },
+      "prompt_len": {
+        "max": 114843,
+        "mean": 38383.32,
+        "min": 1283,
+        "n": 114,
+        "over_128k": 0,
+        "over_64k": 26,
+        "p50": 35434,
+        "p90": 81493,
+        "p95": 94770,
+        "p99": 101435
+      },
+      "response_len": {
+        "max": 69163,
+        "mean": 11795.43,
+        "min": 191,
+        "n": 114,
+        "over_128k": 0,
+        "over_64k": 1,
+        "p50": 7162,
+        "p90": 25693,
+        "p95": 35508,
+        "p99": 49930
+      },
+      "samples": 114,
+      "total_len": {
+        "max": 126998,
+        "mean": 50178.75,
+        "min": 8582,
+        "n": 114,
+        "over_128k": 0,
+        "over_64k": 38,
+        "p50": 43507,
+        "p90": 93179,
+        "p95": 102998,
+        "p99": 115064
+      },
+      "zero_mask_tokens": {
+        "max": 29951,
+        "mean": 5158.88,
+        "min": 0,
+        "n": 114,
+        "over_128k": 0,
+        "over_64k": 0,
+        "p50": 2875,
+        "p90": 12361,
+        "p95": 16835,
+        "p99": 22311
+      }
+    }
+  },
+  "normalized_merge_lower_bound": {
+    "reduction_factor": 7.125,
+    "response_len": {
+      "max": 124286,
+      "mean": 84042.44,
+      "min": 35698,
+      "n": 16,
+      "over_128k": 0,
+      "over_64k": 13,
+      "p50": 86732,
+      "p90": 103971,
+      "p95": 111841,
+      "p99": 111841
+    },
+    "samples_after": 16,
+    "samples_before": 114,
+    "total_len": {
+      "max": 125569,
+      "mean": 85325.44,
+      "min": 36981,
+      "n": 16,
+      "over_128k": 0,
+      "over_64k": 13,
+      "p50": 88015,
+      "p90": 105254,
+      "p95": 113124,
+      "p99": 113124
+    }
+  },
+  "selected_results": 16,
+  "top_by_normalized_chunks": [
+    {
+      "ids": {
+        "group": 0,
+        "index": 18,
+        "rollout": 1,
+        "sample": 18
+      },
+      "modes": {
+        "trajectory": {
+          "loss_tokens": [
+            62993
+          ],
+          "num_samples": 1,
+          "response_lens": [
+            6473081
+          ],
+          "stitch_context_tokens": 6410088,
+          "stitch_full_prompt_turns": 99,
+          "stitch_output_tokens": 62993,
+          "stitch_prefix_tail_turns": 0,
+          "stitch_suffix_prompt_turns": 0,
+          "total_lens": [
+            6474364
+          ],
+          "zero_mask_tokens": [
+            6410088
+          ]
+        },
+        "trajectory_normalized": {
+          "loss_tokens": [
+            3244,
+            3547,
+            2818,
+            2224,
+            1682,
+            5190,
+            2575,
+            1962,
+            1292,
+            10305,
+            898,
+            541,
+            686,
+            1466,
+            499,
+            1541,
+            10706,
+            3384,
+            1536,
+            319,
+            2438,
+            3397,
+            743
+          ],
+          "num_samples": 23,
+          "response_lens": [
+            8128,
+            5406,
+            4500,
+            2224,
+            1798,
+            7162,
+            4296,
+            1962,
+            1292,
+            19175,
+            1560,
+            853,
+            686,
+            2932,
+            549,
+            2118,
+            17199,
+            5831,
+            2044,
+            586,
+            6655,
+            6272,
+            743
+          ],
+          "total_lens": [
+            9411,
+            15238,
+            20818,
+            23433,
+            25652,
+            33542,
+            38310,
+            41086,
+            42798,
+            62412,
+            64576,
+            65511,
+            66865,
+            70274,
+            71509,
+            73950,
+            91660,
+            97540,
+            99662,
+            101139,
+            108090,
+            114763,
+            115586
+          ],
+          "zero_mask_tokens": [
+            4884,
+            1859,
+            1682,
+            0,
+            116,
+            1972,
+            1721,
+            0,
+            0,
+            8870,
+            662,
+            312,
+            0,
+            1466,
+            50,
+            577,
+            6493,
+            2447,
+            508,
+            267,
+            4217,
+            2875,
+            0
+          ]
+        }
+      },
+      "normalized_merge_lower_bound": 105254,
+      "normalized_merge_response_tokens": 103971,
+      "trial": "slime-r1-g0-s18-i18"
+    },
+    {
+      "ids": {
+        "group": 0,
+        "index": 0,
+        "rollout": 1,
+        "sample": 0
+      },
+      "modes": {
+        "trajectory": {
+          "loss_tokens": [
+            46116
+          ],
+          "num_samples": 1,
+          "response_lens": [
+            5114593
+          ],
+          "stitch_context_tokens": 5068477,
+          "stitch_full_prompt_turns": 99,
+          "stitch_output_tokens": 46116,
+          "stitch_prefix_tail_turns": 0,
+          "stitch_suffix_prompt_turns": 0,
+          "total_lens": [
+            5115876
+          ],
+          "zero_mask_tokens": [
+            5068477
+          ]
+        },
+        "trajectory_normalized": {
+          "loss_tokens": [
+            5965,
+            2635,
+            1225,
+            1252,
+            7120,
+            11014,
+            2630,
+            444,
+            374,
+            2459,
+            10998
+          ],
+          "num_samples": 11,
+          "response_lens": [
+            12002,
+            3867,
+            1225,
+            2088,
+            13294,
+            19097,
+            3838,
+            444,
+            374,
+            3591,
+            23017
+          ],
+          "total_lens": [
+            13285,
+            17480,
+            19405,
+            21965,
+            35526,
+            55028,
+            59040,
+            59518,
+            60302,
+            64563,
+            88832
+          ],
+          "zero_mask_tokens": [
+            6037,
+            1232,
+            0,
+            836,
+            6174,
+            8083,
+            1208,
+            0,
+            0,
+            1132,
+            12019
+          ]
+        }
+      },
+      "normalized_merge_lower_bound": 84120,
+      "normalized_merge_response_tokens": 82837,
+      "trial": "slime-r1-g0-s0-i0"
+    },
+    {
+      "ids": {
+        "group": 0,
+        "index": 1,
+        "rollout": 1,
+        "sample": 1
+      },
+      "modes": {
+        "trajectory": {
+          "loss_tokens": [
+            48328
+          ],
+          "num_samples": 1,
+          "response_lens": [
+            5520394
+          ],
+          "stitch_context_tokens": 5472066,
+          "stitch_full_prompt_turns": 99,
+          "stitch_output_tokens": 48328,
+          "stitch_prefix_tail_turns": 0,
+          "stitch_suffix_prompt_turns": 0,
+          "total_lens": [
+            5521677
+          ],
+          "zero_mask_tokens": [
+            5472066
+          ]
+        },
+        "trajectory_normalized": {
+          "loss_tokens": [
+            4525,
+            2842,
+            2575,
+            3130,
+            8438,
+            4682,
+            8796,
+            13340
+          ],
+          "num_samples": 8,
+          "response_lens": [
+            9309,
+            4104,
+            3797,
+            5887,
+            13783,
+            6897,
+            15759,
+            28099
+          ],
+          "total_lens": [
+            10592,
+            14731,
+            19388,
+            25676,
+            39993,
+            46919,
+            64207,
+            93120
+          ],
+          "zero_mask_tokens": [
+            4784,
+            1262,
+            1222,
+            2757,
+            5345,
+            2215,
+            6963,
+            14759
+          ]
+        }
+      },
+      "normalized_merge_lower_bound": 88918,
+      "normalized_merge_response_tokens": 87635,
+      "trial": "slime-r1-g0-s1-i1"
+    },
+    {
+      "ids": {
+        "group": 0,
+        "index": 10,
+        "rollout": 1,
+        "sample": 10
+      },
+      "modes": {
+        "trajectory": {
+          "loss_tokens": [
+            52176
+          ],
+          "num_samples": 1,
+          "response_lens": [
+            5989417
+          ],
+          "stitch_context_tokens": 5937241,
+          "stitch_full_prompt_turns": 99,
+          "stitch_output_tokens": 52176,
+          "stitch_prefix_tail_turns": 0,
+          "stitch_suffix_prompt_turns": 0,
+          "total_lens": [
+            5990700
+          ],
+          "zero_mask_tokens": [
+            5937241
+          ]
+        },
+        "trajectory_normalized": {
+          "loss_tokens": [
+            6367,
+            15964,
+            1776,
+            11497,
+            2279,
+            6605,
+            3018,
+            4670
+          ],
+          "num_samples": 8,
+          "response_lens": [
+            10533,
+            24525,
+            4048,
+            25852,
+            3995,
+            13413,
+            5523,
+            8228
+          ],
+          "total_lens": [
+            11816,
+            38322,
+            43507,
+            69769,
+            74506,
+            88696,
+            94457,
+            102998
+          ],
+          "zero_mask_tokens": [
+            4166,
+            8561,
+            2272,
+            14355,
+            1716,
+            6808,
+            2505,
+            3558
+          ]
+        }
+      },
+      "normalized_merge_lower_bound": 97400,
+      "normalized_merge_response_tokens": 96117,
+      "trial": "slime-r1-g0-s10-i10"
+    },
+    {
+      "ids": {
+        "group": 0,
+        "index": 22,
+        "rollout": 1,
+        "sample": 22
+      },
+      "modes": {
+        "trajectory": {
+          "loss_tokens": [
+            45425
+          ],
+          "num_samples": 1,
+          "response_lens": [
+            4472368
+          ],
+          "stitch_context_tokens": 4426943,
+          "stitch_full_prompt_turns": 94,
+          "stitch_output_tokens": 45425,
+          "stitch_prefix_tail_turns": 0,
+          "stitch_suffix_prompt_turns": 0,
+          "total_lens": [
+            4473651
+          ],
+          "zero_mask_tokens": [
+            4426943
+          ]
+        },
+        "trajectory_normalized": {
+          "loss_tokens": [
+            15596,
+            11129,
+            9727,
+            1079,
+            366,
+            6759,
+            191,
+            578
+          ],
+          "num_samples": 8,
+          "response_lens": [
+            25693,
+            19875,
+            18696,
+            1864,
+            366,
+            12854,
+            191,
+            950
+          ],
+          "total_lens": [
+            26976,
+            47384,
+            66041,
+            68019,
+            68470,
+            81609,
+            81907,
+            83019
+          ],
+          "zero_mask_tokens": [
+            10097,
+            8746,
+            8969,
+            785,
+            0,
+            6095,
+            0,
+            372
+          ]
+        }
+      },
+      "normalized_merge_lower_bound": 81772,
+      "normalized_merge_response_tokens": 80489,
+      "trial": "slime-r1-g0-s22-i22"
+    },
+    {
+      "ids": {
+        "group": 0,
+        "index": 11,
+        "rollout": 1,
+        "sample": 11
+      },
+      "modes": {
+        "trajectory": {
+          "loss_tokens": [
+            24313
+          ],
+          "num_samples": 1,
+          "response_lens": [
+            1085186
+          ],
+          "stitch_context_tokens": 1060873,
+          "stitch_full_prompt_turns": 39,
+          "stitch_output_tokens": 24313,
+          "stitch_prefix_tail_turns": 0,
+          "stitch_suffix_prompt_turns": 0,
+          "total_lens": [
+            1086469
+          ],
+          "zero_mask_tokens": [
+            1060873
+          ]
+        },
+        "trajectory_normalized": {
+          "loss_tokens": [
+            5930,
+            1035,
+            4172,
+            1500,
+            1697,
+            8672,
+            1307
+          ],
+          "num_samples": 7,
+          "response_lens": [
+            10125,
+            1035,
+            5047,
+            1500,
+            1938,
+            13903,
+            2150
+          ],
+          "total_lens": [
+            11408,
+            13856,
+            19892,
+            21979,
+            24729,
+            39118,
+            41780
+          ],
+          "zero_mask_tokens": [
+            4195,
+            0,
+            875,
+            0,
+            241,
+            5231,
+            843
+          ]
+        }
+      },
+      "normalized_merge_lower_bound": 36981,
+      "normalized_merge_response_tokens": 35698,
+      "trial": "slime-r1-g0-s11-i11"
+    },
+    {
+      "ids": {
+        "group": 0,
+        "index": 15,
+        "rollout": 1,
+        "sample": 15
+      },
+      "modes": {
+        "trajectory": {
+          "loss_tokens": [
+            46932
+          ],
+          "num_samples": 1,
+          "response_lens": [
+            5489394
+          ],
+          "stitch_context_tokens": 5442462,
+          "stitch_full_prompt_turns": 99,
+          "stitch_output_tokens": 46932,
+          "stitch_prefix_tail_turns": 0,
+          "stitch_suffix_prompt_turns": 0,
+          "total_lens": [
+            5490677
+          ],
+          "zero_mask_tokens": [
+            5442462
+          ]
+        },
+        "trajectory_normalized": {
+          "loss_tokens": [
+            5797,
+            2092,
+            14303,
+            2583,
+            4240,
+            9185,
+            8732
+          ],
+          "num_samples": 7,
+          "response_lens": [
+            11690,
+            2580,
+            25353,
+            3806,
+            6811,
+            15521,
+            17667
+          ],
+          "total_lens": [
+            12973,
+            16784,
+            43394,
+            47706,
+            54998,
+            70918,
+            89877
+          ],
+          "zero_mask_tokens": [
+            5893,
+            488,
+            11050,
+            1223,
+            2571,
+            6336,
+            8935
+          ]
+        }
+      },
+      "normalized_merge_lower_bound": 84711,
+      "normalized_merge_response_tokens": 83428,
+      "trial": "slime-r1-g0-s15-i15"
+    },
+    {
+      "ids": {
+        "group": 0,
+        "index": 17,
+        "rollout": 1,
+        "sample": 17
+      },
+      "modes": {
+        "trajectory": {
+          "loss_tokens": [
+            65212
+          ],
+          "num_samples": 1,
+          "response_lens": [
+            5790552
+          ],
+          "stitch_context_tokens": 5725340,
+          "stitch_full_prompt_turns": 97,
+          "stitch_output_tokens": 65212,
+          "stitch_prefix_tail_turns": 0,
+          "stitch_suffix_prompt_turns": 0,
+          "total_lens": [
+            5791835
+          ],
+          "zero_mask_tokens": [
+            5725340
+          ]
+        },
+        "trajectory_normalized": {
+          "loss_tokens": [
+            2528,
+            2278,
+            3582,
+            12773,
+            5047,
+            27619,
+            11385
+          ],
+          "num_samples": 7,
+          "response_lens": [
+            8497,
+            2278,
+            3582,
+            20979,
+            7044,
+            49930,
+            19531
+          ],
+          "total_lens": [
+            9780,
+            12659,
+            16566,
+            37923,
+            45195,
+            95692,
+            115064
+          ],
+          "zero_mask_tokens": [
+            5969,
+            0,
+            0,
+            8206,
+            1997,
+            22311,
+            8146
+          ]
+        }
+      },
+      "normalized_merge_lower_bound": 113124,
+      "normalized_merge_response_tokens": 111841,
+      "trial": "slime-r1-g0-s17-i17"
+    },
+    {
+      "ids": {
+        "group": 0,
+        "index": 2,
+        "rollout": 1,
+        "sample": 2
+      },
+      "modes": {
+        "trajectory": {
+          "loss_tokens": [
+            34381
+          ],
+          "num_samples": 1,
+          "response_lens": [
+            2183370
+          ],
+          "stitch_context_tokens": 2148989,
+          "stitch_full_prompt_turns": 54,
+          "stitch_output_tokens": 34381,
+          "stitch_prefix_tail_turns": 0,
+          "stitch_suffix_prompt_turns": 0,
+          "total_lens": [
+            2184653
+          ],
+          "zero_mask_tokens": [
+            2148989
+          ]
+        },
+        "trajectory_normalized": {
+          "loss_tokens": [
+            2844,
+            2258,
+            13810,
+            1085,
+            1849,
+            1003,
+            11532
+          ],
+          "num_samples": 7,
+          "response_lens": [
+            7690,
+            2258,
+            22283,
+            1085,
+            3816,
+            1003,
+            23502
+          ],
+          "total_lens": [
+            8973,
+            11603,
+            34228,
+            35909,
+            40251,
+            42295,
+            66217
+          ],
+          "zero_mask_tokens": [
+            4846,
+            0,
+            8473,
+            0,
+            1967,
+            0,
+            11970
+          ]
+        }
+      },
+      "normalized_merge_lower_bound": 62920,
+      "normalized_merge_response_tokens": 61637,
+      "trial": "slime-r1-g0-s2-i2"
+    },
+    {
+      "ids": {
+        "group": 0,
+        "index": 12,
+        "rollout": 1,
+        "sample": 12
+      },
+      "modes": {
+        "trajectory": {
+          "loss_tokens": [
+            37230
+          ],
+          "num_samples": 1,
+          "response_lens": [
+            3144269
+          ],
+          "stitch_context_tokens": 3107039,
+          "stitch_full_prompt_turns": 80,
+          "stitch_output_tokens": 37230,
+          "stitch_prefix_tail_turns": 0,
+          "stitch_suffix_prompt_turns": 0,
+          "total_lens": [
+            3145552
+          ],
+          "zero_mask_tokens": [
+            3107039
+          ]
+        },
+        "trajectory_normalized": {
+          "loss_tokens": [
+            5189,
+            1895,
+            17972,
+            1185,
+            10989
+          ],
+          "num_samples": 5,
+          "response_lens": [
+            11132,
+            3002,
+            34176,
+            2167,
+            22373
+          ],
+          "total_lens": [
+            12415,
+            15705,
+            50129,
+            52622,
+            75514
+          ],
+          "zero_mask_tokens": [
+            5943,
+            1107,
+            16204,
+            982,
+            11384
+          ]
+        }
+      },
+      "normalized_merge_lower_bound": 74133,
+      "normalized_merge_response_tokens": 72850,
+      "trial": "slime-r1-g0-s12-i12"
+    },
+    {
+      "ids": {
+        "group": 0,
+        "index": 13,
+        "rollout": 1,
+        "sample": 13
+      },
+      "modes": {
+        "trajectory": {
+          "loss_tokens": [
+            70451
+          ],
+          "num_samples": 1,
+          "response_lens": [
+            6794005
+          ],
+          "stitch_context_tokens": 6723554,
+          "stitch_full_prompt_turns": 96,
+          "stitch_output_tokens": 70451,
+          "stitch_prefix_tail_turns": 0,
+          "stitch_suffix_prompt_turns": 0,
+          "total_lens": [
+            6795288
+          ],
+          "zero_mask_tokens": [
+            6723554
+          ]
+        },
+        "trajectory_normalized": {
+          "loss_tokens": [
+            4300,
+            695,
+            25791,
+            20992,
+            18673
+          ],
+          "num_samples": 5,
+          "response_lens": [
+            8183,
+            695,
+            42859,
+            37041,
+            35508
+          ],
+          "total_lens": [
+            9466,
+            10204,
+            53718,
+            91106,
+            126998
+          ],
+          "zero_mask_tokens": [
+            3883,
+            0,
+            17068,
+            16049,
+            16835
+          ]
+        }
+      },
+      "normalized_merge_lower_bound": 125569,
+      "normalized_merge_response_tokens": 124286,
+      "trial": "slime-r1-g0-s13-i13"
+    },
+    {
+      "ids": {
+        "group": 0,
+        "index": 21,
+        "rollout": 1,
+        "sample": 21
+      },
+      "modes": {
+        "trajectory": {
+          "loss_tokens": [
+            45388
+          ],
+          "num_samples": 1,
+          "response_lens": [
+            4725130
+          ],
+          "stitch_context_tokens": 4679742,
+          "stitch_full_prompt_turns": 99,
+          "stitch_output_tokens": 45388,
+          "stitch_prefix_tail_turns": 0,
+          "stitch_suffix_prompt_turns": 0,
+          "total_lens": [
+            4726413
+          ],
+          "zero_mask_tokens": [
+            4679742
+          ]
+        },
+        "trajectory_normalized": {
+          "loss_tokens": [
+            7959,
+            5039,
+            3058,
+            12744,
+            16588
+          ],
+          "num_samples": 5,
+          "response_lens": [
+            13943,
+            8604,
+            4999,
+            25105,
+            34081
+          ],
+          "total_lens": [
+            15226,
+            23879,
+            29576,
+            55150,
+            90198
+          ],
+          "zero_mask_tokens": [
+            5984,
+            3565,
+            1941,
+            12361,
+            17493
+          ]
+        }
+      },
+      "normalized_merge_lower_bound": 88015,
+      "normalized_merge_response_tokens": 86732,
+      "trial": "slime-r1-g0-s21-i21"
+    },
+    {
+      "ids": {
+        "group": 0,
+        "index": 19,
+        "rollout": 1,
+        "sample": 19
+      },
+      "modes": {
+        "trajectory": {
+          "loss_tokens": [
+            53938
+          ],
+          "num_samples": 1,
+          "response_lens": [
+            4804330
+          ],
+          "stitch_context_tokens": 4750392,
+          "stitch_full_prompt_turns": 89,
+          "stitch_output_tokens": 53938,
+          "stitch_prefix_tail_turns": 0,
+          "stitch_suffix_prompt_turns": 0,
+          "total_lens": [
+            4805613
+          ],
+          "zero_mask_tokens": [
+            4750392
+          ]
+        },
+        "trajectory_normalized": {
+          "loss_tokens": [
+            3908,
+            3423,
+            7395,
+            39212
+          ],
+          "num_samples": 4,
+          "response_lens": [
+            7923,
+            3423,
+            10170,
+            69163
+          ],
+          "total_lens": [
+            9206,
+            13027,
+            23634,
+            93179
+          ],
+          "zero_mask_tokens": [
+            4015,
+            0,
+            2775,
+            29951
+          ]
+        }
+      },
+      "normalized_merge_lower_bound": 91962,
+      "normalized_merge_response_tokens": 90679,
+      "trial": "slime-r1-g0-s19-i19"
+    },
+    {
+      "ids": {
+        "group": 0,
+        "index": 14,
+        "rollout": 1,
+        "sample": 14
+      },
+      "modes": {
+        "trajectory": {
+          "loss_tokens": [
+            53915
+          ],
+          "num_samples": 1,
+          "response_lens": [
+            6104804
+          ],
+          "stitch_context_tokens": 6050889,
+          "stitch_full_prompt_turns": 99,
+          "stitch_output_tokens": 53915,
+          "stitch_prefix_tail_turns": 0,
+          "stitch_suffix_prompt_turns": 0,
+          "total_lens": [
+            6106087
+          ],
+          "zero_mask_tokens": [
+            6050889
+          ]
+        },
+        "trajectory_normalized": {
+          "loss_tokens": [
+            18687,
+            23331,
+            11897
+          ],
+          "num_samples": 3,
+          "response_lens": [
+            33083,
+            45087,
+            24239
+          ],
+          "total_lens": [
+            34366,
+            80521,
+            105732
+          ],
+          "zero_mask_tokens": [
+            14396,
+            21756,
+            12342
+          ]
+        }
+      },
+      "normalized_merge_lower_bound": 103692,
+      "normalized_merge_response_tokens": 102409,
+      "trial": "slime-r1-g0-s14-i14"
+    },
+    {
+      "ids": {
+        "group": 0,
+        "index": 16,
+        "rollout": 1,
+        "sample": 16
+      },
+      "modes": {
+        "trajectory": {
+          "loss_tokens": [
+            47302
+          ],
+          "num_samples": 1,
+          "response_lens": [
+            3366469
+          ],
+          "stitch_context_tokens": 3319167,
+          "stitch_full_prompt_turns": 67,
+          "stitch_output_tokens": 47302,
+          "stitch_prefix_tail_turns": 0,
+          "stitch_suffix_prompt_turns": 0,
+          "total_lens": [
+            3367752
+          ],
+          "zero_mask_tokens": [
+            3319167
+          ]
+        },
+        "trajectory_normalized": {
+          "loss_tokens": [
+            2605,
+            33889,
+            10808
+          ],
+          "num_samples": 3,
+          "response_lens": [
+            7299,
+            57464,
+            19597
+          ],
+          "total_lens": [
+            8582,
+            68025,
+            88133
+          ],
+          "zero_mask_tokens": [
+            4694,
+            23575,
+            8789
+          ]
+        }
+      },
+      "normalized_merge_lower_bound": 85643,
+      "normalized_merge_response_tokens": 84360,
+      "trial": "slime-r1-g0-s16-i16"
+    },
+    {
+      "ids": {
+        "group": 0,
+        "index": 20,
+        "rollout": 1,
+        "sample": 20
+      },
+      "modes": {
+        "trajectory": {
+          "loss_tokens": [
+            22467
+          ],
+          "num_samples": 1,
+          "response_lens": [
+            1021401
+          ],
+          "stitch_context_tokens": 998934,
+          "stitch_full_prompt_turns": 36,
+          "stitch_output_tokens": 22467,
+          "stitch_prefix_tail_turns": 0,
+          "stitch_suffix_prompt_turns": 0,
+          "total_lens": [
+            1022684
+          ],
+          "zero_mask_tokens": [
+            998934
+          ]
+        },
+        "trajectory_normalized": {
+          "loss_tokens": [
+            6147,
+            12626,
+            3694
+          ],
+          "num_samples": 3,
+          "response_lens": [
+            12374,
+            20011,
+            7325
+          ],
+          "total_lens": [
+            13657,
+            34758,
+            42994
+          ],
+          "zero_mask_tokens": [
+            6227,
+            7385,
+            3631
+          ]
+        }
+      },
+      "normalized_merge_lower_bound": 40993,
+      "normalized_merge_response_tokens": 39710,
+      "trial": "slime-r1-g0-s20-i20"
+    }
+  ],
+  "top_by_trajectory_total_len": [
+    {
+      "ids": {
+        "group": 0,
+        "index": 13,
+        "rollout": 1,
+        "sample": 13
+      },
+      "modes": {
+        "trajectory": {
+          "loss_tokens": [
+            70451
+          ],
+          "num_samples": 1,
+          "response_lens": [
+            6794005
+          ],
+          "stitch_context_tokens": 6723554,
+          "stitch_full_prompt_turns": 96,
+          "stitch_output_tokens": 70451,
+          "stitch_prefix_tail_turns": 0,
+          "stitch_suffix_prompt_turns": 0,
+          "total_lens": [
+            6795288
+          ],
+          "zero_mask_tokens": [
+            6723554
+          ]
+        },
+        "trajectory_normalized": {
+          "loss_tokens": [
+            4300,
+            695,
+            25791,
+            20992,
+            18673
+          ],
+          "num_samples": 5,
+          "response_lens": [
+            8183,
+            695,
+            42859,
+            37041,
+            35508
+          ],
+          "total_lens": [
+            9466,
+            10204,
+            53718,
+            91106,
+            126998
+          ],
+          "zero_mask_tokens": [
+            3883,
+            0,
+            17068,
+            16049,
+            16835
+          ]
+        }
+      },
+      "normalized_merge_lower_bound": 125569,
+      "normalized_merge_response_tokens": 124286,
+      "trial": "slime-r1-g0-s13-i13"
+    },
+    {
+      "ids": {
+        "group": 0,
+        "index": 18,
+        "rollout": 1,
+        "sample": 18
+      },
+      "modes": {
+        "trajectory": {
+          "loss_tokens": [
+            62993
+          ],
+          "num_samples": 1,
+          "response_lens": [
+            6473081
+          ],
+          "stitch_context_tokens": 6410088,
+          "stitch_full_prompt_turns": 99,
+          "stitch_output_tokens": 62993,
+          "stitch_prefix_tail_turns": 0,
+          "stitch_suffix_prompt_turns": 0,
+          "total_lens": [
+            6474364
+          ],
+          "zero_mask_tokens": [
+            6410088
+          ]
+        },
+        "trajectory_normalized": {
+          "loss_tokens": [
+            3244,
+            3547,
+            2818,
+            2224,
+            1682,
+            5190,
+            2575,
+            1962,
+            1292,
+            10305,
+            898,
+            541,
+            686,
+            1466,
+            499,
+            1541,
+            10706,
+            3384,
+            1536,
+            319,
+            2438,
+            3397,
+            743
+          ],
+          "num_samples": 23,
+          "response_lens": [
+            8128,
+            5406,
+            4500,
+            2224,
+            1798,
+            7162,
+            4296,
+            1962,
+            1292,
+            19175,
+            1560,
+            853,
+            686,
+            2932,
+            549,
+            2118,
+            17199,
+            5831,
+            2044,
+            586,
+            6655,
+            6272,
+            743
+          ],
+          "total_lens": [
+            9411,
+            15238,
+            20818,
+            23433,
+            25652,
+            33542,
+            38310,
+            41086,
+            42798,
+            62412,
+            64576,
+            65511,
+            66865,
+            70274,
+            71509,
+            73950,
+            91660,
+            97540,
+            99662,
+            101139,
+            108090,
+            114763,
+            115586
+          ],
+          "zero_mask_tokens": [
+            4884,
+            1859,
+            1682,
+            0,
+            116,
+            1972,
+            1721,
+            0,
+            0,
+            8870,
+            662,
+            312,
+            0,
+            1466,
+            50,
+            577,
+            6493,
+            2447,
+            508,
+            267,
+            4217,
+            2875,
+            0
+          ]
+        }
+      },
+      "normalized_merge_lower_bound": 105254,
+      "normalized_merge_response_tokens": 103971,
+      "trial": "slime-r1-g0-s18-i18"
+    },
+    {
+      "ids": {
+        "group": 0,
+        "index": 14,
+        "rollout": 1,
+        "sample": 14
+      },
+      "modes": {
+        "trajectory": {
+          "loss_tokens": [
+            53915
+          ],
+          "num_samples": 1,
+          "response_lens": [
+            6104804
+          ],
+          "stitch_context_tokens": 6050889,
+          "stitch_full_prompt_turns": 99,
+          "stitch_output_tokens": 53915,
+          "stitch_prefix_tail_turns": 0,
+          "stitch_suffix_prompt_turns": 0,
+          "total_lens": [
+            6106087
+          ],
+          "zero_mask_tokens": [
+            6050889
+          ]
+        },
+        "trajectory_normalized": {
+          "loss_tokens": [
+            18687,
+            23331,
+            11897
+          ],
+          "num_samples": 3,
+          "response_lens": [
+            33083,
+            45087,
+            24239
+          ],
+          "total_lens": [
+            34366,
+            80521,
+            105732
+          ],
+          "zero_mask_tokens": [
+            14396,
+            21756,
+            12342
+          ]
+        }
+      },
+      "normalized_merge_lower_bound": 103692,
+      "normalized_merge_response_tokens": 102409,
+      "trial": "slime-r1-g0-s14-i14"
+    },
+    {
+      "ids": {
+        "group": 0,
+        "index": 10,
+        "rollout": 1,
+        "sample": 10
+      },
+      "modes": {
+        "trajectory": {
+          "loss_tokens": [
+            52176
+          ],
+          "num_samples": 1,
+          "response_lens": [
+            5989417
+          ],
+          "stitch_context_tokens": 5937241,
+          "stitch_full_prompt_turns": 99,
+          "stitch_output_tokens": 52176,
+          "stitch_prefix_tail_turns": 0,
+          "stitch_suffix_prompt_turns": 0,
+          "total_lens": [
+            5990700
+          ],
+          "zero_mask_tokens": [
+            5937241
+          ]
+        },
+        "trajectory_normalized": {
+          "loss_tokens": [
+            6367,
+            15964,
+            1776,
+            11497,
+            2279,
+            6605,
+            3018,
+            4670
+          ],
+          "num_samples": 8,
+          "response_lens": [
+            10533,
+            24525,
+            4048,
+            25852,
+            3995,
+            13413,
+            5523,
+            8228
+          ],
+          "total_lens": [
+            11816,
+            38322,
+            43507,
+            69769,
+            74506,
+            88696,
+            94457,
+            102998
+          ],
+          "zero_mask_tokens": [
+            4166,
+            8561,
+            2272,
+            14355,
+            1716,
+            6808,
+            2505,
+            3558
+          ]
+        }
+      },
+      "normalized_merge_lower_bound": 97400,
+      "normalized_merge_response_tokens": 96117,
+      "trial": "slime-r1-g0-s10-i10"
+    },
+    {
+      "ids": {
+        "group": 0,
+        "index": 17,
+        "rollout": 1,
+        "sample": 17
+      },
+      "modes": {
+        "trajectory": {
+          "loss_tokens": [
+            65212
+          ],
+          "num_samples": 1,
+          "response_lens": [
+            5790552
+          ],
+          "stitch_context_tokens": 5725340,
+          "stitch_full_prompt_turns": 97,
+          "stitch_output_tokens": 65212,
+          "stitch_prefix_tail_turns": 0,
+          "stitch_suffix_prompt_turns": 0,
+          "total_lens": [
+            5791835
+          ],
+          "zero_mask_tokens": [
+            5725340
+          ]
+        },
+        "trajectory_normalized": {
+          "loss_tokens": [
+            2528,
+            2278,
+            3582,
+            12773,
+            5047,
+            27619,
+            11385
+          ],
+          "num_samples": 7,
+          "response_lens": [
+            8497,
+            2278,
+            3582,
+            20979,
+            7044,
+            49930,
+            19531
+          ],
+          "total_lens": [
+            9780,
+            12659,
+            16566,
+            37923,
+            45195,
+            95692,
+            115064
+          ],
+          "zero_mask_tokens": [
+            5969,
+            0,
+            0,
+            8206,
+            1997,
+            22311,
+            8146
+          ]
+        }
+      },
+      "normalized_merge_lower_bound": 113124,
+      "normalized_merge_response_tokens": 111841,
+      "trial": "slime-r1-g0-s17-i17"
+    },
+    {
+      "ids": {
+        "group": 0,
+        "index": 1,
+        "rollout": 1,
+        "sample": 1
+      },
+      "modes": {
+        "trajectory": {
+          "loss_tokens": [
+            48328
+          ],
+          "num_samples": 1,
+          "response_lens": [
+            5520394
+          ],
+          "stitch_context_tokens": 5472066,
+          "stitch_full_prompt_turns": 99,
+          "stitch_output_tokens": 48328,
+          "stitch_prefix_tail_turns": 0,
+          "stitch_suffix_prompt_turns": 0,
+          "total_lens": [
+            5521677
+          ],
+          "zero_mask_tokens": [
+            5472066
+          ]
+        },
+        "trajectory_normalized": {
+          "loss_tokens": [
+            4525,
+            2842,
+            2575,
+            3130,
+            8438,
+            4682,
+            8796,
+            13340
+          ],
+          "num_samples": 8,
+          "response_lens": [
+            9309,
+            4104,
+            3797,
+            5887,
+            13783,
+            6897,
+            15759,
+            28099
+          ],
+          "total_lens": [
+            10592,
+            14731,
+            19388,
+            25676,
+            39993,
+            46919,
+            64207,
+            93120
+          ],
+          "zero_mask_tokens": [
+            4784,
+            1262,
+            1222,
+            2757,
+            5345,
+            2215,
+            6963,
+            14759
+          ]
+        }
+      },
+      "normalized_merge_lower_bound": 88918,
+      "normalized_merge_response_tokens": 87635,
+      "trial": "slime-r1-g0-s1-i1"
+    },
+    {
+      "ids": {
+        "group": 0,
+        "index": 15,
+        "rollout": 1,
+        "sample": 15
+      },
+      "modes": {
+        "trajectory": {
+          "loss_tokens": [
+            46932
+          ],
+          "num_samples": 1,
+          "response_lens": [
+            5489394
+          ],
+          "stitch_context_tokens": 5442462,
+          "stitch_full_prompt_turns": 99,
+          "stitch_output_tokens": 46932,
+          "stitch_prefix_tail_turns": 0,
+          "stitch_suffix_prompt_turns": 0,
+          "total_lens": [
+            5490677
+          ],
+          "zero_mask_tokens": [
+            5442462
+          ]
+        },
+        "trajectory_normalized": {
+          "loss_tokens": [
+            5797,
+            2092,
+            14303,
+            2583,
+            4240,
+            9185,
+            8732
+          ],
+          "num_samples": 7,
+          "response_lens": [
+            11690,
+            2580,
+            25353,
+            3806,
+            6811,
+            15521,
+            17667
+          ],
+          "total_lens": [
+            12973,
+            16784,
+            43394,
+            47706,
+            54998,
+            70918,
+            89877
+          ],
+          "zero_mask_tokens": [
+            5893,
+            488,
+            11050,
+            1223,
+            2571,
+            6336,
+            8935
+          ]
+        }
+      },
+      "normalized_merge_lower_bound": 84711,
+      "normalized_merge_response_tokens": 83428,
+      "trial": "slime-r1-g0-s15-i15"
+    },
+    {
+      "ids": {
+        "group": 0,
+        "index": 0,
+        "rollout": 1,
+        "sample": 0
+      },
+      "modes": {
+        "trajectory": {
+          "loss_tokens": [
+            46116
+          ],
+          "num_samples": 1,
+          "response_lens": [
+            5114593
+          ],
+          "stitch_context_tokens": 5068477,
+          "stitch_full_prompt_turns": 99,
+          "stitch_output_tokens": 46116,
+          "stitch_prefix_tail_turns": 0,
+          "stitch_suffix_prompt_turns": 0,
+          "total_lens": [
+            5115876
+          ],
+          "zero_mask_tokens": [
+            5068477
+          ]
+        },
+        "trajectory_normalized": {
+          "loss_tokens": [
+            5965,
+            2635,
+            1225,
+            1252,
+            7120,
+            11014,
+            2630,
+            444,
+            374,
+            2459,
+            10998
+          ],
+          "num_samples": 11,
+          "response_lens": [
+            12002,
+            3867,
+            1225,
+            2088,
+            13294,
+            19097,
+            3838,
+            444,
+            374,
+            3591,
+            23017
+          ],
+          "total_lens": [
+            13285,
+            17480,
+            19405,
+            21965,
+            35526,
+            55028,
+            59040,
+            59518,
+            60302,
+            64563,
+            88832
+          ],
+          "zero_mask_tokens": [
+            6037,
+            1232,
+            0,
+            836,
+            6174,
+            8083,
+            1208,
+            0,
+            0,
+            1132,
+            12019
+          ]
+        }
+      },
+      "normalized_merge_lower_bound": 84120,
+      "normalized_merge_response_tokens": 82837,
+      "trial": "slime-r1-g0-s0-i0"
+    },
+    {
+      "ids": {
+        "group": 0,
+        "index": 19,
+        "rollout": 1,
+        "sample": 19
+      },
+      "modes": {
+        "trajectory": {
+          "loss_tokens": [
+            53938
+          ],
+          "num_samples": 1,
+          "response_lens": [
+            4804330
+          ],
+          "stitch_context_tokens": 4750392,
+          "stitch_full_prompt_turns": 89,
+          "stitch_output_tokens": 53938,
+          "stitch_prefix_tail_turns": 0,
+          "stitch_suffix_prompt_turns": 0,
+          "total_lens": [
+            4805613
+          ],
+          "zero_mask_tokens": [
+            4750392
+          ]
+        },
+        "trajectory_normalized": {
+          "loss_tokens": [
+            3908,
+            3423,
+            7395,
+            39212
+          ],
+          "num_samples": 4,
+          "response_lens": [
+            7923,
+            3423,
+            10170,
+            69163
+          ],
+          "total_lens": [
+            9206,
+            13027,
+            23634,
+            93179
+          ],
+          "zero_mask_tokens": [
+            4015,
+            0,
+            2775,
+            29951
+          ]
+        }
+      },
+      "normalized_merge_lower_bound": 91962,
+      "normalized_merge_response_tokens": 90679,
+      "trial": "slime-r1-g0-s19-i19"
+    },
+    {
+      "ids": {
+        "group": 0,
+        "index": 21,
+        "rollout": 1,
+        "sample": 21
+      },
+      "modes": {
+        "trajectory": {
+          "loss_tokens": [
+            45388
+          ],
+          "num_samples": 1,
+          "response_lens": [
+            4725130
+          ],
+          "stitch_context_tokens": 4679742,
+          "stitch_full_prompt_turns": 99,
+          "stitch_output_tokens": 45388,
+          "stitch_prefix_tail_turns": 0,
+          "stitch_suffix_prompt_turns": 0,
+          "total_lens": [
+            4726413
+          ],
+          "zero_mask_tokens": [
+            4679742
+          ]
+        },
+        "trajectory_normalized": {
+          "loss_tokens": [
+            7959,
+            5039,
+            3058,
+            12744,
+            16588
+          ],
+          "num_samples": 5,
+          "response_lens": [
+            13943,
+            8604,
+            4999,
+            25105,
+            34081
+          ],
+          "total_lens": [
+            15226,
+            23879,
+            29576,
+            55150,
+            90198
+          ],
+          "zero_mask_tokens": [
+            5984,
+            3565,
+            1941,
+            12361,
+            17493
+          ]
+        }
+      },
+      "normalized_merge_lower_bound": 88015,
+      "normalized_merge_response_tokens": 86732,
+      "trial": "slime-r1-g0-s21-i21"
+    },
+    {
+      "ids": {
+        "group": 0,
+        "index": 22,
+        "rollout": 1,
+        "sample": 22
+      },
+      "modes": {
+        "trajectory": {
+          "loss_tokens": [
+            45425
+          ],
+          "num_samples": 1,
+          "response_lens": [
+            4472368
+          ],
+          "stitch_context_tokens": 4426943,
+          "stitch_full_prompt_turns": 94,
+          "stitch_output_tokens": 45425,
+          "stitch_prefix_tail_turns": 0,
+          "stitch_suffix_prompt_turns": 0,
+          "total_lens": [
+            4473651
+          ],
+          "zero_mask_tokens": [
+            4426943
+          ]
+        },
+        "trajectory_normalized": {
+          "loss_tokens": [
+            15596,
+            11129,
+            9727,
+            1079,
+            366,
+            6759,
+            191,
+            578
+          ],
+          "num_samples": 8,
+          "response_lens": [
+            25693,
+            19875,
+            18696,
+            1864,
+            366,
+            12854,
+            191,
+            950
+          ],
+          "total_lens": [
+            26976,
+            47384,
+            66041,
+            68019,
+            68470,
+            81609,
+            81907,
+            83019
+          ],
+          "zero_mask_tokens": [
+            10097,
+            8746,
+            8969,
+            785,
+            0,
+            6095,
+            0,
+            372
+          ]
+        }
+      },
+      "normalized_merge_lower_bound": 81772,
+      "normalized_merge_response_tokens": 80489,
+      "trial": "slime-r1-g0-s22-i22"
+    },
+    {
+      "ids": {
+        "group": 0,
+        "index": 16,
+        "rollout": 1,
+        "sample": 16
+      },
+      "modes": {
+        "trajectory": {
+          "loss_tokens": [
+            47302
+          ],
+          "num_samples": 1,
+          "response_lens": [
+            3366469
+          ],
+          "stitch_context_tokens": 3319167,
+          "stitch_full_prompt_turns": 67,
+          "stitch_output_tokens": 47302,
+          "stitch_prefix_tail_turns": 0,
+          "stitch_suffix_prompt_turns": 0,
+          "total_lens": [
+            3367752
+          ],
+          "zero_mask_tokens": [
+            3319167
+          ]
+        },
+        "trajectory_normalized": {
+          "loss_tokens": [
+            2605,
+            33889,
+            10808
+          ],
+          "num_samples": 3,
+          "response_lens": [
+            7299,
+            57464,
+            19597
+          ],
+          "total_lens": [
+            8582,
+            68025,
+            88133
+          ],
+          "zero_mask_tokens": [
+            4694,
+            23575,
+            8789
+          ]
+        }
+      },
+      "normalized_merge_lower_bound": 85643,
+      "normalized_merge_response_tokens": 84360,
+      "trial": "slime-r1-g0-s16-i16"
+    },
+    {
+      "ids": {
+        "group": 0,
+        "index": 12,
+        "rollout": 1,
+        "sample": 12
+      },
+      "modes": {
+        "trajectory": {
+          "loss_tokens": [
+            37230
+          ],
+          "num_samples": 1,
+          "response_lens": [
+            3144269
+          ],
+          "stitch_context_tokens": 3107039,
+          "stitch_full_prompt_turns": 80,
+          "stitch_output_tokens": 37230,
+          "stitch_prefix_tail_turns": 0,
+          "stitch_suffix_prompt_turns": 0,
+          "total_lens": [
+            3145552
+          ],
+          "zero_mask_tokens": [
+            3107039
+          ]
+        },
+        "trajectory_normalized": {
+          "loss_tokens": [
+            5189,
+            1895,
+            17972,
+            1185,
+            10989
+          ],
+          "num_samples": 5,
+          "response_lens": [
+            11132,
+            3002,
+            34176,
+            2167,
+            22373
+          ],
+          "total_lens": [
+            12415,
+            15705,
+            50129,
+            52622,
+            75514
+          ],
+          "zero_mask_tokens": [
+            5943,
+            1107,
+            16204,
+            982,
+            11384
+          ]
+        }
+      },
+      "normalized_merge_lower_bound": 74133,
+      "normalized_merge_response_tokens": 72850,
+      "trial": "slime-r1-g0-s12-i12"
+    },
+    {
+      "ids": {
+        "group": 0,
+        "index": 2,
+        "rollout": 1,
+        "sample": 2
+      },
+      "modes": {
+        "trajectory": {
+          "loss_tokens": [
+            34381
+          ],
+          "num_samples": 1,
+          "response_lens": [
+            2183370
+          ],
+          "stitch_context_tokens": 2148989,
+          "stitch_full_prompt_turns": 54,
+          "stitch_output_tokens": 34381,
+          "stitch_prefix_tail_turns": 0,
+          "stitch_suffix_prompt_turns": 0,
+          "total_lens": [
+            2184653
+          ],
+          "zero_mask_tokens": [
+            2148989
+          ]
+        },
+        "trajectory_normalized": {
+          "loss_tokens": [
+            2844,
+            2258,
+            13810,
+            1085,
+            1849,
+            1003,
+            11532
+          ],
+          "num_samples": 7,
+          "response_lens": [
+            7690,
+            2258,
+            22283,
+            1085,
+            3816,
+            1003,
+            23502
+          ],
+          "total_lens": [
+            8973,
+            11603,
+            34228,
+            35909,
+            40251,
+            42295,
+            66217
+          ],
+          "zero_mask_tokens": [
+            4846,
+            0,
+            8473,
+            0,
+            1967,
+            0,
+            11970
+          ]
+        }
+      },
+      "normalized_merge_lower_bound": 62920,
+      "normalized_merge_response_tokens": 61637,
+      "trial": "slime-r1-g0-s2-i2"
+    },
+    {
+      "ids": {
+        "group": 0,
+        "index": 11,
+        "rollout": 1,
+        "sample": 11
+      },
+      "modes": {
+        "trajectory": {
+          "loss_tokens": [
+            24313
+          ],
+          "num_samples": 1,
+          "response_lens": [
+            1085186
+          ],
+          "stitch_context_tokens": 1060873,
+          "stitch_full_prompt_turns": 39,
+          "stitch_output_tokens": 24313,
+          "stitch_prefix_tail_turns": 0,
+          "stitch_suffix_prompt_turns": 0,
+          "total_lens": [
+            1086469
+          ],
+          "zero_mask_tokens": [
+            1060873
+          ]
+        },
+        "trajectory_normalized": {
+          "loss_tokens": [
+            5930,
+            1035,
+            4172,
+            1500,
+            1697,
+            8672,
+            1307
+          ],
+          "num_samples": 7,
+          "response_lens": [
+            10125,
+            1035,
+            5047,
+            1500,
+            1938,
+            13903,
+            2150
+          ],
+          "total_lens": [
+            11408,
+            13856,
+            19892,
+            21979,
+            24729,
+            39118,
+            41780
+          ],
+          "zero_mask_tokens": [
+            4195,
+            0,
+            875,
+            0,
+            241,
+            5231,
+            843
+          ]
+        }
+      },
+      "normalized_merge_lower_bound": 36981,
+      "normalized_merge_response_tokens": 35698,
+      "trial": "slime-r1-g0-s11-i11"
+    },
+    {
+      "ids": {
+        "group": 0,
+        "index": 20,
+        "rollout": 1,
+        "sample": 20
+      },
+      "modes": {
+        "trajectory": {
+          "loss_tokens": [
+            22467
+          ],
+          "num_samples": 1,
+          "response_lens": [
+            1021401
+          ],
+          "stitch_context_tokens": 998934,
+          "stitch_full_prompt_turns": 36,
+          "stitch_output_tokens": 22467,
+          "stitch_prefix_tail_turns": 0,
+          "stitch_suffix_prompt_turns": 0,
+          "total_lens": [
+            1022684
+          ],
+          "zero_mask_tokens": [
+            998934
+          ]
+        },
+        "trajectory_normalized": {
+          "loss_tokens": [
+            6147,
+            12626,
+            3694
+          ],
+          "num_samples": 3,
+          "response_lens": [
+            12374,
+            20011,
+            7325
+          ],
+          "total_lens": [
+            13657,
+            34758,
+            42994
+          ],
+          "zero_mask_tokens": [
+            6227,
+            7385,
+            3631
+          ]
+        }
+      },
+      "normalized_merge_lower_bound": 40993,
+      "normalized_merge_response_tokens": 39710,
+      "trial": "slime-r1-g0-s20-i20"
+    }
+  ],
+  "trajectory_stitch_stats": {
+    "context_tokens": {
+      "max": 6723554,
+      "mean": 4457637.25,
+      "min": 998934,
+      "n": 16,
+      "over_128k": 16,
+      "over_64k": 16,
+      "p50": 5068477,
+      "p90": 6050889,
+      "p95": 6410088,
+      "p99": 6410088
+    },
+    "full_prompt_turns": {
+      "max": 99,
+      "mean": 84.06,
+      "min": 36,
+      "n": 16,
+      "over_128k": 0,
+      "over_64k": 0,
+      "p50": 97,
+      "p90": 99,
+      "p95": 99,
+      "p99": 99
+    },
+    "output_tokens": {
+      "max": 70451,
+      "mean": 47285.44,
+      "min": 22467,
+      "n": 16,
+      "over_128k": 0,
+      "over_64k": 1,
+      "p50": 47302,
+      "p90": 62993,
+      "p95": 65212,
+      "p99": 65212
+    },
+    "prefix_tail_turns": {
+      "max": 0,
+      "mean": 0.0,
+      "min": 0,
+      "n": 16,
+      "over_128k": 0,
+      "over_64k": 0,
+      "p50": 0,
+      "p90": 0,
+      "p95": 0,
+      "p99": 0
+    },
+    "suffix_prompt_turns": {
+      "max": 0,
+      "mean": 0.0,
+      "min": 0,
+      "n": 16,
+      "over_128k": 0,
+      "over_64k": 0,
+      "p50": 0,
+      "p90": 0,
+      "p95": 0,
+      "p99": 0
+    }
+  },
+  "trials_dir": "/path/to/workspace/slime_harbor_trials/tb2_full89_32gpu_9b_max100_actor1_rollout3_batch3_n32_resp4096_ctx128k_timeout3600_trajectory_normalized_20260606_123111"
+}

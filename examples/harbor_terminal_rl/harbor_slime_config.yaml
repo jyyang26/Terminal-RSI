@@ -1,0 +1,43 @@
+# Loaded by slime --custom-config-path. Keys become attributes on `args`.
+
+# Use one of:
+# 1. Native Harbor task entries:
+# harbor_tasks:
+#   - task:
+#       path: /path/to/harbor/task
+#
+# 2. stable_rl_tb_rl terminal-bench parquet/json, materialized into Harbor tasks:
+harbor_stable_tasks_path: /path/to/workspace/code/stable_rl_tb_rl/data/train.parquet
+harbor_materialized_tasks_dir: /tmp/slime-harbor-stable-tasks
+harbor_stable_sif_cache_dir: /path/to/workspace/code/stable_rl_tb_rl/data/sif_cache
+harbor_stable_tasks_limit: 1
+harbor_stable_tasks_offset: 0
+harbor_stable_apt_proxy: http://star-proxy.oa.com:3128
+
+harbor_trial_defaults:
+  trials_dir: /tmp/slime-harbor-trials
+  timeout_multiplier: 1.0
+  agent:
+    import_path: slime_plugins.harbor.agent:SlimeTerminus2
+    model_name: slime-policy
+    kwargs:
+      parser_name: json
+      max_turns: 20
+      collect_rollout_details: true
+      enable_summarize: false
+      record_terminal_session: false
+      llm_backend: slime_sglang
+  environment:
+    import_path: slime_plugins.harbor.singularity_env:SlimeSingularityEnvironment
+    kwargs:
+      # Current Jizhi pods need proc suppressed; otherwise Apptainer cannot
+      # mount proc under --containall/--pid. Bind host /proc back in so tmux and
+      # package setup scripts can still resolve /proc/self and process state.
+      singularity_no_mount: home,tmp,bind-paths,proc
+      singularity_bind_host_proc: true
+
+harbor_sample_mode: turn
+harbor_reward_key: reward
+harbor_num_concurrent_trials: 1
+harbor_fail_on_conversion_error: true
+harbor_fail_on_trial_error: false

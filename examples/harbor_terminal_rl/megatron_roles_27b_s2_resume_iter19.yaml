@@ -1,0 +1,53 @@
+# Megatron per-role config for the S2 production run resumed from run #2 iter_0000019.
+#
+# Identical to megatron_roles_27b_s2_resume_iter4.yaml. Kept as a separate file so the
+# resume point is legible from the filename and so tuning this 100-step run cannot
+# retroactively alter the iter4 smoke-test configuration.
+#
+# WHY value_clip 4.0 -> 0.08
+# The warm-critic run needed a WIDE value clip (4.0) because it was re-calibrating a
+# head trained on the old /20 scale onto the /82 scale -- the first updates required a
+# large value DELTA and a tight clip would have throttled exactly that.
+# Stage S2 inverts the situation: the reward is now hard-bounded to [0, 1] (measured
+# max 1.0000 over 3331 replayed trials, vs 3.0000 under legacy p90), so the regression
+# target variance is small and a 4.0 clip is ~50x wider than any legitimate step. It
+# would let a single noisy minibatch move V by more than the entire reward range.
+# 0.08 sits inside the requested 0.05-0.10 band: ~8% of the full target range per
+# update, which still permits the iter_0000019 head (trained on the UNBOUNDED legacy
+# scale) to walk down into [0, 1] over the critic-only warmup steps rather than in one
+# jump.
+#
+# NOTE on the warmup budget at alpha=0.50: the head being resumed was fit against the
+# legacy /82 reward, whose values ran well above 1.0. Two critic-only steps at a 0.08
+# clip move V by at most ~0.16 per parameter-visit, so the head will still be settling
+# when the actor unfreezes at rollout_id 22. That is accepted (it mirrors run #2, where
+# the critic kept improving for ~9 steps) but it is the reason actor clip_grad is left
+# at the conservative top-level 1.0 below -- the actor must not chase an unsettled
+# value estimate.
+#
+# WHY clip_grad stays 100.0 for the critic
+# Run #2 measured critic grad_norm 127-409 against the top-level default of 1.0, i.e.
+# the gradient was being scaled down ~100-400x; that is why the cold critic needed ~9
+# steps to become useful. The bounded reward shrinks the target but NOT necessarily the
+# gradient norm at the moment the scale changes, so the headroom is kept. The ACTOR
+# keeps the top-level 1.0 (its grad_norm was 0.13-0.18 under the same run) -- loosening
+# it would risk the policy, which is the thing this resume is trying to preserve.
+#
+# lr is unchanged: critic 1.5e-5 / actor 5.0e-7 = 30x, matching the checkpoint being
+# resumed so the optimizer moments and the LR schedule stay consistent.
+
+megatron:
+  - name: q38-27b-s2-actor
+    role: actor
+    overrides:
+      lr: 5.0e-7
+      min_lr: 5.0e-7
+      # clip_grad deliberately NOT overridden -> inherits the top-level 1.0.
+
+  - name: q38-27b-s2-critic
+    role: critic
+    overrides:
+      lr: 1.5e-5        # 30x the actor's 5.0e-7
+      min_lr: 1.5e-5
+      value_clip: 0.08  # was 4.0; recalibrated for the bounded [0,1] S2 reward
+      clip_grad: 100.0  # unchanged; see rationale above

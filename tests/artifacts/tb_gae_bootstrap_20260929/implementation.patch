@@ -1,0 +1,1530 @@
+--- a/slime-terminal-RL/slime_plugins/harbor/atif_adapter.py
++++ b/slime-terminal-RL/slime_plugins/harbor/atif_adapter.py
+@@ -88,11 +88,13 @@
+     if score_centering_top_k is not None:
+         sc_kwargs["score_centering_top_k"] = score_centering_top_k
+     if enable_tb_gae is True:
+-        from slime_plugins.harbor.tb_gae_data import trial_termination_kind
++        from slime_plugins.harbor.tb_gae_data import trial_bootstrap_metadata
+ 
+         if include_subagents:
+             raise ValueError("TB-GAE first release does not support subagent rollouts")
+-        metadata = {**(metadata or {}), "harbor_termination_kind": trial_termination_kind(result)}
++        metadata = {**(metadata or {}), **trial_bootstrap_metadata(result)}
++        if metadata["harbor_termination_kind"] == "truncated":
++            status = Sample.Status.TRUNCATED
+         sc_kwargs["enable_tb_gae"] = True
+     return samples_from_rollout_details(
+         details,
+@@ -541,8 +543,8 @@
+     if enable_tb_gae is True:
+         if mode != "trajectory_retokenized" or len(details) != 1:
+             raise ValueError("TB-GAE requires one trajectory_retokenized detail")
+-        if status != Sample.Status.COMPLETED:
+-            raise ValueError("TB-GAE first release requires a completed terminated trial")
++        if status not in {Sample.Status.COMPLETED, Sample.Status.TRUNCATED}:
++            raise ValueError("TB-GAE requires completed or explicitly truncated trial")
+         sc_kwargs["enable_tb_gae"] = True
+     if not details:
+         return converted
+@@ -823,10 +825,13 @@
+ 
+         if sample_mode != "trajectory_retokenized":
+             raise ValueError("TB-GAE only supports trajectory_retokenized")
+-        if (metadata or {}).get("harbor_termination_kind") != "terminated":
+-            raise ValueError("TB-GAE requires explicit harbor_termination_kind='terminated'")
+-        if any(item["strategy"] == "split" for item in transitions):
+-            raise ValueError("TB-GAE split chunks require a continuation/bootstrap protocol")
++        if (metadata or {}).get("harbor_termination_kind") not in {"terminated", "truncated"}:
++            raise ValueError("TB-GAE requires explicit termination metadata")
++        if metadata["harbor_termination_kind"] == "truncated":
++            if not metadata.get("harbor_bootstrap_token_ids"):
++                raise ValueError("TB-GAE truncated trial needs bootstrap state")
++            if metadata.get("harbor_bootstrap_action_count") != total_output_tokens:
++                raise ValueError("TB-GAE bootstrap state does not follow all collected actions")
+         tb_output_spans = []
+     chunks: list[dict[str, Any]] = []
+     prompt_ids = list(turns[0].prompt_ids)
+@@ -863,6 +868,8 @@
+                 "started_after_split": chunk_started_after_split,
+             }
+         )
++        if enable_tb_gae is True:
++            chunks[-1]["tb_output_spans"] = list(tb_output_spans)
+ 
+     for turn_index, turn in enumerate(turns):
+         output_placeholder_first = False
+@@ -875,6 +882,8 @@
+ 
+                 prompt_ids = list(turn.prompt_ids)
+                 response_ids = []
++                if enable_tb_gae is True:
++                    tb_output_spans = []
+                 loss_mask = []
+                 rollout_log_probs = []
+                 chunk_start_turn = turn_index
+@@ -1019,11 +1028,20 @@
+             _attach_normalized_sc_head(sample, chunk, turns, transitions, sc_turn_heads, k=score_centering_top_k)
+         if enable_tb_gae is True:
+             te, done = build_tb_masks(
+-                sample.response_length, tb_output_spans, sample.loss_mask,
+-                termination_kind=metadata["harbor_termination_kind"], is_last_chunk=True,
++                sample.response_length, chunk["tb_output_spans"], sample.loss_mask,
++                termination_kind=metadata["harbor_termination_kind"], is_last_chunk=chunk_index == len(chunks) - 1,
+             )
+             sample.metadata["turn_end_mask"] = te
+             sample.metadata["is_real_done"] = done
++            last = chunk_index == len(chunks) - 1
++            sample.metadata["tb_boundary"] = {
++                "episode": str(group_id), "chunk_index": chunk_index, "chunk_count": len(chunks),
++                "terminal": last and metadata["harbor_termination_kind"] == "terminated",
++                "bootstrap_token_ids": metadata.get("harbor_bootstrap_token_ids") if last else None,
++            }
++            # Full successor context belongs only to the last chunk sidecar.
++            sample.metadata.pop("harbor_bootstrap_token_ids", None)
++            sample.metadata.pop("harbor_bootstrap_action_count", None)
+         samples.append(sample)
+ 
+     return samples
+--- a/slime-terminal-RL/slime_plugins/harbor/llm.py
++++ b/slime-terminal-RL/slime_plugins/harbor/llm.py
+@@ -250,6 +250,14 @@
+             return int(self._max_context_tokens)
+         return int(getattr(self._tokenizer, "model_max_length", 131072) or 131072)
+ 
++    def encode_bootstrap_state(self, prompt: str, *, message_history) -> list[int]:
++        """Encode the next decision state without making an SGLang request.
++
++        Uses exactly the same chat template/tokenizer as call(). The caller
++        records this after the last action/observation, not from action logits.
++        """
++        return self._encode_messages([*message_history, {"role": "user", "content": prompt}])
++
+     def get_model_output_limit(self) -> int | None:
+         return self._max_new_tokens
+ 
+--- a/slime-terminal-RL/slime_plugins/harbor/tb_gae.py
++++ b/slime-terminal-RL/slime_plugins/harbor/tb_gae.py
+@@ -206,6 +206,9 @@
+ 
+     validate_tb_gae_config(args)
+     _validate_layout(args.qkv_format, args.allgather_cp, mpu.get_context_parallel_world_size())
++    if "tb_boundary" in rollout_data:
++        _episode_tb_gae(args, rollout_data)
++        return
+     values = rollout_data.get("values")
+     if values is None:
+         raise ValueError("TB-GAE requires critic values on the last pipeline stage")
+@@ -269,3 +272,106 @@
+         lambda_turn=args.tb_gae_lambda_turn,
+     )
+     rollout_data["advantages"], rollout_data["returns"] = advantages, returns
++
++
++@torch.no_grad()
++def _episode_tb_gae(args, data):
++    from megatron.core import mpu
++    from slime.backends.megatron_utils.cp_utils import all_gather_with_cp, slice_log_prob_with_cp
++    from slime_plugins.harbor.tb_gae_boundary import gather_and_solve_boundaries
++    from slime_plugins.harbor.tb_gae_data import validate_tb_masks
++
++    count = len(data["values"])
++    for key in (
++        "tb_boundary",
++        "loss_masks",
++        "turn_end_mask",
++        "is_real_done",
++        "total_lengths",
++        "response_lengths",
++        "rewards",
++    ):
++        if len(data[key]) != count:
++            raise ValueError(f"TB-GAE sample count mismatch: {key}")
++    bootstrap = data.get("tb_bootstrap_values")
++    if bootstrap is not None and len(bootstrap) != count:
++        raise ValueError("TB-GAE bootstrap count mismatch")
++    gamma, lam = args.tb_gae_gamma_turn, args.tb_gae_lambda_turn
++    full_rows, summaries = [], []
++    for i, (local, boundary) in enumerate(zip(data["values"], data["tb_boundary"], strict=True)):
++        total, response = data["total_lengths"][i], data["response_lengths"][i]
++        action = data["loss_masks"][i]
++        action_cpu = action.detach().cpu().numpy() if torch.is_tensor(action) else action
++        te, done = validate_tb_masks(
++            data["turn_end_mask"][i], data["is_real_done"][i], action_cpu, require_terminal=boundary["terminal"]
++        )
++        masks = [torch.as_tensor(m, device=local.device, dtype=torch.bool) for m in (action_cpu, te, done)]
++        if any(m.shape != (response,) for m in masks):
++            raise ValueError("TB-GAE full masks are not response aligned")
++        if local.shape != slice_log_prob_with_cp(masks[0], total, response).shape:
++            raise ValueError("TB-GAE values are not native CP slices")
++        full = all_gather_with_cp(local.detach(), total, response).detach()
++        reward = torch.zeros_like(full)
++        idx = torch.nonzero(masks[0], as_tuple=True)[0]
++        outcome = float(data["rewards"][i])
++        last = boundary["chunk_index"] == boundary["chunk_count"] - 1
++        if len(idx) and last:
++            reward[idx[-1]] = outcome
++        zero = full.new_zeros(1)
++        adv, _ = compute_tb_gae(
++            full[None],
++            reward[None],
++            *(m[None] for m in masks),
++            gamma,
++            lam,
++            bootstrap_values=zero,
++            continuation_advantages=zero,
++        )
++        if len(idx):
++            # Match the recurrence's boundary discounts, including mid-turn splits.
++            turns = masks[1][idx]
++            g = torch.where(turns, torch.full_like(full[idx], gamma), torch.ones_like(full[idx]))
++            lambdas = torch.where(turns, torch.full_like(full[idx], lam), torch.ones_like(full[idx]))
++            if boundary["terminal"]:
++                g[-1] = 0.0
++            w = g * lambdas
++            cv = float((torch.prod(w[:-1]) * g[-1]).item())
++            ca = float(torch.prod(w).item())
++            base, first = float(adv[0, idx[0]].item()), float(full[idx[0]].item())
++        else:
++            cv = ca = base = first = 0.0
++        summaries.append(
++            {
++                "episode": boundary["episode"],
++                "chunk_index": boundary["chunk_index"],
++                "chunk_count": boundary["chunk_count"],
++                "terminal": boundary["terminal"],
++                "active": bool(len(idx)),
++                "outcome": outcome,
++                "base": base,
++                "first_value": first,
++                "value_coefficient": cv,
++                "advantage_coefficient": ca,
++                "bootstrap": bootstrap[i] if bootstrap is not None else None,
++            }
++        )
++        full_rows.append((full, reward, masks))
++    # Each CP/TP lane exchanges the same small summaries across the DP replicas.
++    group = mpu.get_data_parallel_group_gloo(with_context_parallel=False)
++    continuations = gather_and_solve_boundaries(summaries, group)
++    advantages, returns = [], []
++    for i, ((full, reward, masks), boundary) in enumerate(zip(full_rows, data["tb_boundary"], strict=True)):
++        next_v, next_a = continuations[(boundary["episode"], boundary["chunk_index"])]
++        a, r = compute_tb_gae(
++            full[None],
++            reward[None],
++            *(m[None] for m in masks),
++            gamma,
++            lam,
++            bootstrap_values=full.new_tensor([next_v]),
++            continuation_advantages=full.new_tensor([next_a]),
++        )
++        total, response = data["total_lengths"][i], data["response_lengths"][i]
++        advantages.append(slice_log_prob_with_cp(a[0], total, response).detach())
++        returns.append(slice_log_prob_with_cp(r[0], total, response).detach())
++    data["advantages"], data["returns"] = advantages, returns
+--- a/slime-terminal-RL/slime_plugins/harbor/tb_gae_data.py
++++ b/slime-terminal-RL/slime_plugins/harbor/tb_gae_data.py
+@@ -1,12 +1,13 @@
+ """CPU-only response masks for the explicitly enabled TB-GAE path.
+ 
+-First release accepts one complete, explicitly terminated trajectory. A model
+-generation finish_reason or a successful verifier is not an environment done.
++Explicit termination and successor-state contracts for whole episodes, including
++truncated and split trajectories. Generation finish_reason is not environment done.
+ """
+ 
+ import numpy as np
+ 
+ TB_MASK_KEYS = ("turn_end_mask", "is_real_done")
++TB_DATA_KEYS = (*TB_MASK_KEYS, "tb_boundary")
+ 
+ 
+ def _get(obj, key, default=None):
+@@ -15,21 +16,44 @@
+ 
+ def trial_termination_kind(result):
+     """Read the explicit producer contract; never guess from EOS/status/reward."""
+-    if _get(result, "exception_info") is not None:
+-        raise ValueError("TB-GAE cannot bootstrap an interrupted/failed trial")
++    exception = _get(result, "exception_info")
+     if _get(result, "step_results"):
+         raise ValueError("TB-GAE first release does not support multi-step trials")
+     context = _get(result, "agent_result")
+     metadata = _get(context, "metadata", {}) or {}
+     kind = metadata.get("termination_kind")
+-    if kind != "terminated":
++    if exception is not None and _get(exception, "exception_type") not in {
++        "AgentTimeoutError",
++        "TimeoutError",
++        "ContextLengthExceededError",
++        "OutputLengthExceededError",
++        "CancelledError",
++    }:
++        raise ValueError("TB-GAE cannot use a failed trial without a valid truncation state")
++    if kind not in {"terminated", "truncated"}:
+         raise ValueError(
+-            "TB-GAE requires explicit agent_result.metadata.termination_kind='terminated'; "
++            "TB-GAE requires explicit agent_result.metadata.termination_kind='terminated' or 'truncated'; "
+             f"got kind={kind!r}, reason={metadata.get('termination_reason')!r}. "
+-            "unknown/truncated/continuing trials need a bootstrap protocol; "
++            "unknown/continuing trials cannot be treated as complete episodes; "
+             "missing metadata requires the Terminus-2 producer patch and record_termination_metadata=True"
+         )
++    if kind == "truncated":
++        tokens = metadata.get("bootstrap_token_ids")
++        if not isinstance(tokens, list) or not tokens or any(type(t) is not int or t < 0 for t in tokens):
++            raise ValueError(
++                f"TB-GAE truncated trial is missing a valid bootstrap state: {metadata.get('bootstrap_error')}"
++            )
+     return kind
++
++
++def trial_bootstrap_metadata(result):
++    kind = trial_termination_kind(result)
++    metadata = _get(_get(result, "agent_result"), "metadata", {}) or {}
++    return {
++        "harbor_termination_kind": kind,
++        "harbor_bootstrap_token_ids": metadata.get("bootstrap_token_ids") if kind == "truncated" else None,
++        "harbor_bootstrap_action_count": metadata.get("bootstrap_action_count") if kind == "truncated" else None,
++    }
+ 
+ 
+ def _mask(value, length, name):
+@@ -61,8 +85,8 @@
+ 
+ 
+ def build_tb_masks(response_length, output_spans, action_mask, *, termination_kind, is_last_chunk):
+-    if termination_kind != "terminated" or is_last_chunk is not True:
+-        raise ValueError("TB-GAE first release requires a complete terminated single chunk")
++    if termination_kind not in {"terminated", "truncated"}:
++        raise ValueError("TB-GAE needs explicit terminated/truncated metadata")
+     action = _mask(action_mask, response_length, "action_mask")
+     te = np.zeros(response_length, dtype=np.bool_)
+     dn = np.zeros(response_length, dtype=np.bool_)
+@@ -79,14 +103,15 @@
+             te[end - 1] = True
+     if not np.array_equal(coverage, action) or not action.any():
+         raise ValueError("TB-GAE output spans must cover every active token")
+-    dn[np.flatnonzero(action)[-1]] = True
+-    return validate_tb_masks(te, dn, action)
++    if termination_kind == "terminated" and is_last_chunk:
++        dn[np.flatnonzero(action)[-1]] = True
++    return validate_tb_masks(te, dn, action, require_terminal=False)
+ 
+ 
+ def validate_and_collect_tb_masks(samples, final_loss_masks):
+     if len(samples) != len(final_loss_masks):
+         raise ValueError("TB-GAE samples/loss_masks count mismatch")
+-    result = {key: [] for key in TB_MASK_KEYS}
++    result = {key: [] for key in TB_DATA_KEYS}
+     for sample, action in zip(samples, final_loss_masks, strict=True):
+         metadata = sample.metadata or {}
+         if any(key not in metadata for key in TB_MASK_KEYS):
+@@ -94,13 +119,42 @@
+         if len(action) != sample.response_length:
+             raise ValueError("TB-GAE final loss_mask/response_length mismatch")
+         masks = [_mask(metadata[key], sample.response_length, key) for key in TB_MASK_KEYS]
+-        if metadata.get("harbor_trajectory_num_chunks", 1) != 1:
+-            raise ValueError("TB-GAE multi-chunk samples require a continuation/bootstrap protocol")
++        boundary = metadata.get("tb_boundary")
++        if boundary is None:
++            # Legacy complete terminal fixtures remain valid; incomplete tails never guessed.
++            boundary = dict(
++                episode=str(sample.group_id if sample.group_id is not None else sample.index),
++                chunk_index=0,
++                chunk_count=1,
++                terminal=True,
++                bootstrap_token_ids=None,
++            )
++        if type(boundary.get("terminal")) is not bool or not isinstance(boundary.get("episode"), str):
++            raise ValueError("TB-GAE boundary needs a boolean terminal and string episode ID")
++        if any(type(boundary.get(k)) is not int for k in ("chunk_index", "chunk_count")):
++            raise ValueError("TB-GAE chunk index/count must be integers")
++        if not 0 <= boundary["chunk_index"] < boundary["chunk_count"]:
++            raise ValueError("TB-GAE chunk index out of range")
+         if sample.remove_sample:
+             masks = [np.zeros(sample.response_length, dtype=np.bool_) for _ in TB_MASK_KEYS]
+-        te, dn = validate_tb_masks(*masks, action)
++        te, dn = validate_tb_masks(*masks, action, require_terminal=boundary["terminal"])
++        if not boundary["terminal"] and dn.any():
++            raise ValueError("TB-GAE nonterminal chunk cannot contain real done")
++        if not boundary["terminal"] and boundary["chunk_index"] == boundary["chunk_count"] - 1:
++            if not boundary.get("bootstrap_token_ids"):
++                raise ValueError("TB-GAE nonterminal final chunk needs bootstrap_token_ids")
+         result["turn_end_mask"].append(te)
+         result["is_real_done"].append(dn)
++        result["tb_boundary"].append(boundary)
++    episodes = {}
++    for b in result["tb_boundary"]:
++        episodes.setdefault(b["episode"], []).append(b)
++    for group in episodes.values():
++        count = group[0]["chunk_count"]
++        if sorted(b["chunk_index"] for b in group) != list(range(count)) or any(
++            b["chunk_count"] != count for b in group
++        ):
++            raise ValueError("TB-GAE episode chunks incomplete/duplicated before DP distribution")
+     return result
+ 
+ 
+--- a/slime-terminal-RL/slime_plugins/harbor/tb_gae_termination.py
++++ b/slime-terminal-RL/slime_plugins/harbor/tb_gae_termination.py
+@@ -20,10 +20,10 @@
+     source = inspect.getfile(SlimeTerminus2._run_agent_loop)
+     parameters = inspect.signature(SlimeTerminus2.__init__).parameters
+     if (
+-        getattr(SlimeTerminus2, "TERMINATION_METADATA_VERSION", None) != 1
++        getattr(SlimeTerminus2, "TERMINATION_METADATA_VERSION", None) != 2
+         or "record_termination_metadata" not in parameters
+     ):
+         raise ValueError(
+-            f"TB-GAE termination producer unavailable in loaded Harbor: {source}. Deploy the Terminus-2 termination metadata v1 patch to HARBOR_SRC and restart workers; configuration validation alone is insufficient."
++            f"TB-GAE bootstrap producer unavailable in loaded Harbor: {source}. Deploy the Terminus-2 termination metadata v2 patch to HARBOR_SRC and restart workers."
+         )
+     kwargs["record_termination_metadata"] = True
+--- /dev/null
++++ b/slime-terminal-RL/slime_plugins/harbor/tb_gae_boundary.py
+@@ -0,0 +1,55 @@
++"""Small, CPU-serializable continuation summaries across DP partitions."""
++
++import math
++
++
++def solve_episode_boundaries(records):
++    """Solve reverse chunk continuations without gathering full token values.
++
++    A_first = base + value_coefficient * V_next + advantage_coefficient * A_next.
++    Records are keyed by (episode, chunk_index), independent of DP packing.
++    """
++    episodes = {}
++    for row in records:
++        episodes.setdefault(row["episode"], []).append(row)
++    result = {}
++    for episode, rows in episodes.items():
++        rows.sort(key=lambda row: row["chunk_index"])
++        count = rows[0]["chunk_count"]
++        if len(rows) != count or [r["chunk_index"] for r in rows] != list(range(count)):
++            raise ValueError(f"TB-GAE incomplete/duplicate chunks for episode {episode}")
++        if any(r["chunk_count"] != count for r in rows):
++            raise ValueError("TB-GAE inconsistent chunk count")
++        if any(r["terminal"] for r in rows[:-1]):
++            raise ValueError("TB-GAE real done before final chunk")
++        if any(r["active"] != rows[0]["active"] for r in rows):
++            raise ValueError("TB-GAE cannot silently remove a subset of episode chunks")
++        if not rows[0]["active"]:
++            for row in rows:
++                result[(episode, row["chunk_index"])] = (0.0, 0.0)
++            continue
++        if any(r["outcome"] != rows[-1]["outcome"] for r in rows):
++            raise ValueError("TB-GAE chunks disagree on episode outcome reward")
++        next_v = 0.0 if rows[-1]["terminal"] else rows[-1]["bootstrap"]
++        if next_v is None or not math.isfinite(next_v):
++            raise ValueError("TB-GAE truncated final chunk lacks a finite old-critic bootstrap value")
++        next_a = 0.0  # Finite rollout GAE tail, distinct from a zero value bootstrap.
++        for row in reversed(rows):
++            if not all(
++                math.isfinite(row[k]) for k in ("base", "first_value", "value_coefficient", "advantage_coefficient")
++            ):
++                raise ValueError("TB-GAE boundary summary must be finite")
++            result[(episode, row["chunk_index"])] = (next_v, next_a)
++            first_a = row["base"] + row["value_coefficient"] * next_v + row["advantage_coefficient"] * next_a
++            next_v, next_a = row["first_value"], first_a
++    return result
++
++
++def gather_and_solve_boundaries(records, group=None):
++    import torch.distributed as dist
++
++    if group is None or dist.get_world_size(group) == 1:
++        return solve_episode_boundaries(records)
++    parts = [None] * dist.get_world_size(group)
++    dist.all_gather_object(parts, records, group=group)
++    return solve_episode_boundaries([row for part in parts for row in part])
+--- /dev/null
++++ b/slime-terminal-RL/slime_plugins/harbor/tb_gae_chunks.py
+@@ -0,0 +1,82 @@
++"""Preserve every action when TB training exceeds the model context cap."""
++
++import copy
++
++import numpy as np
++
++from slime.utils.types import Sample
++
++
++def split_tb_samples(all_samples, cap):
++    if cap < 3:
++        raise ValueError("TB-GAE context cap must allow a prompt and response")
++
++    def split(sample):
++        boundary = sample.metadata.get("tb_boundary")
++        if boundary is None:
++            raise ValueError("TB-GAE sample has no chunk boundary metadata")
++        total, response = len(sample.tokens), sample.response_length
++        if not 0 < response < total:
++            raise ValueError("TB-GAE requires nonempty prompt/response")
++        if total <= cap:
++            return [sample]
++        prompt = total - response
++        stride = max(1, cap // 2)
++        parts = []
++        for start in range(0, response, stride):
++            stop = min(response, start + stride)
++            mask = sample.loss_mask[start:stop]
++            if not any(mask):
++                continue  # observations are context, never training actions
++            first = prompt + start
++            end = prompt + stop
++            context_start = max(0, end - cap)
++            part = copy.copy(sample)
++            part.tokens = list(sample.tokens[context_start:end])
++            part.response_length = stop - start
++            part.loss_mask = list(mask)
++            part.rollout_log_probs = list(sample.rollout_log_probs[start:stop])
++            part.metadata = dict(sample.metadata)
++            for key in ("turn_end_mask", "is_real_done"):
++                part.metadata[key] = np.asarray(sample.metadata[key][start:stop], dtype=np.bool_).copy()
++            part.metadata["tb_boundary"] = dict(boundary)
++            if stop < response:
++                part.metadata["tb_boundary"].update(terminal=False, bootstrap_token_ids=None)
++            part.metadata["tb_context_dropped_tokens"] = context_start
++            part.metadata["tb_original_response_range"] = [start, stop]
++            if sample.rollout_routed_experts is not None:
++                raise ValueError("TB-GAE hard chunking with routing replay is not supported")
++            if part.response_length >= len(part.tokens) or first < context_start:
++                raise ValueError("TB-GAE split left no prompt")
++            parts.append(part)
++        if not parts:
++            raise ValueError("TB-GAE split has no action tokens")
++        return parts
++
++    def walk(node):
++        if not isinstance(node, list):
++            raise ValueError("TB-GAE sample container must be a list")
++        replacement = []
++        for value in node:
++            if isinstance(value, Sample):
++                replacement.extend(split(value))
++            else:
++                walk(value)
++                replacement.append(value)
++        node[:] = replacement
++
++    walk(all_samples)
++    episodes = {}
++
++    def collect(node):
++        for item in node:
++            if isinstance(item, Sample):
++                episodes.setdefault(item.metadata["tb_boundary"]["episode"], []).append(item)
++            else:
++                collect(item)
++
++    collect(all_samples)
++    for members in episodes.values():
++        # Original list order is trajectory order, before DP packing reorders it.
++        for index, member in enumerate(members):
++            member.metadata["tb_boundary"].update(chunk_index=index, chunk_count=len(members))
+--- a/slime-terminal-RL/slime_plugins/harbor/sample_postprocess.py
++++ b/slime-terminal-RL/slime_plugins/harbor/sample_postprocess.py
+@@ -115,6 +115,11 @@
+ 
+     cap = _get_cap(args)
+     if cap is None:
++        return
++    if getattr(args, "enable_tb_gae", False) is True:
++        from slime_plugins.harbor.tb_gae_chunks import split_tb_samples
++
++        split_tb_samples(all_samples, cap)
+         return
+ 
+     total = 0
+--- a/slime-terminal-RL/slime/ray/rollout.py
++++ b/slime-terminal-RL/slime/ray/rollout.py
+@@ -1117,7 +1117,9 @@
+                     continue
+                 rollout_data[key] = [data[key][j] for j in partition]
+             if getattr(self.args, "enable_tb_gae", False) is True:
+-                for key in ("turn_end_mask", "is_real_done"):
++                from slime_plugins.harbor.tb_gae_data import TB_DATA_KEYS
++
++                for key in TB_DATA_KEYS:
+                     if key not in data or len(data[key]) != len(total_lengths):
+                         raise ValueError(f"TB-GAE DP input missing or misaligned {key}")
+                     rollout_data[key] = [data[key][j] for j in partition]
+--- a/slime-terminal-RL/slime/backends/megatron_utils/actor.py
++++ b/slime-terminal-RL/slime/backends/megatron_utils/actor.py
+@@ -453,6 +453,13 @@
+         # Compute current critic values (used as old_values for value loss and for actor advantages).
+         rollout_data.update(forward_only(get_values, self.args, self.model, data_iterator, num_microbatches))
+ 
++        if getattr(self.args, "enable_tb_gae", False) is True:
++            from slime.backends.megatron_utils.tb_gae_bootstrap import compute_bootstrap_values
++
++            bootstrap_values = compute_bootstrap_values(self.args, self.model, rollout_data)
++            if mpu.is_pipeline_last_stage():
++                rollout_data["tb_bootstrap_values"] = bootstrap_values
++
+         compute_advantages_and_returns(self.args, rollout_data)
+ 
+         self.args.loss_type = "value_loss"
+@@ -469,7 +476,10 @@
+         if mpu.is_pipeline_last_stage() and "values" in rollout_data:
+             from slime.backends.megatron_utils.data import tensors_to_cpu
+ 
+-            return {"values": tensors_to_cpu(rollout_data["values"])}
++            result = {"values": tensors_to_cpu(rollout_data["values"])}
++            if getattr(self.args, "enable_tb_gae", False) is True:
++                result["tb_bootstrap_values"] = rollout_data["tb_bootstrap_values"]
++            return result
+         return {}
+ 
+     def train_actor(self, rollout_id: int, rollout_data: RolloutBatch, external_data=None) -> None:
+@@ -546,6 +556,10 @@
+                             from slime.backends.megatron_utils.data import tensors_to_gpu
+ 
+                             rollout_data["values"] = tensors_to_gpu(values)
++                        if getattr(self.args, "enable_tb_gae", False) is True:
++                            if "tb_bootstrap_values" not in external_data:
++                                raise ValueError("TB-GAE actor requires old-critic bootstrap values")
++                            rollout_data["tb_bootstrap_values"] = external_data["tb_bootstrap_values"]
+                 if self._active_model_tag != "actor":
+                     self._switch_model("actor")
+ 
+--- a/slime-terminal-RL/slime/backends/megatron_utils/data.py
++++ b/slime-terminal-RL/slime/backends/megatron_utils/data.py
+@@ -303,7 +303,9 @@
+         num_groups_in_rollout = sum(rollout_data["global_batch_sizes"])
+ 
+         for key, val in rollout_data.items():
+-            if getattr(args, "enable_tb_gae", False) is True and key in {"turn_end_mask", "is_real_done"}:
++            if getattr(args, "enable_tb_gae", False) is True and key in {
++                "turn_end_mask", "is_real_done", "tb_boundary", "tb_bootstrap_values"
++            }:
+                 continue
+             if getattr(args, "enable_score_centering", False) and key in {
+                 "rollout_topk_token_ids",
+--- /dev/null
++++ b/slime-terminal-RL/slime/backends/megatron_utils/tb_gae_bootstrap.py
+@@ -0,0 +1,101 @@
++"""Opt-in successor-state critic forward before any critic optimizer update."""
++
++import copy
++
++import torch
++import torch.distributed as dist
++
++
++def make_bootstrap_batch(rollout_data, *, device, max_tokens, padded_count=None):
++    """One probe per local sample, same schedule on every TP/CP/PP rank.
++
++    A dummy token after the successor prefix lets get_values select the last
++    prefix logit (the state before the next action). The dummy is never trained.
++    Non-bootstrap samples have a tiny zero-loss probe for equal PP schedules.
++    """
++    tokens, masks, lengths = [], [], []
++    required = []
++    if max_tokens < 2:
++        raise ValueError("TB-GAE bootstrap context must allow prefix + probe")
++    for boundary in rollout_data["tb_boundary"]:
++        needs_value = not boundary["terminal"] and boundary["chunk_index"] == boundary["chunk_count"] - 1
++        prefix = boundary.get("bootstrap_token_ids") if needs_value else [0]
++        if not isinstance(prefix, (list, tuple)) or not prefix or any(type(t) is not int or t < 0 for t in prefix):
++            raise ValueError("TB-GAE needs a valid successor token prefix")
++        # Same explicit left-context window policy as capped training chunks;
++        # preserve the complete latest observation / generation boundary tail.
++        prefix = prefix[-(max_tokens - 1) :]
++        tokens.append(torch.tensor([*prefix, 0], dtype=torch.long, device=device))
++        masks.append(torch.ones(1, dtype=torch.int, device=device))
++        lengths.append(len(prefix) + 1)
++        required.append(needs_value)
++    padded_count = len(tokens) if padded_count is None else padded_count
++    if padded_count < len(tokens):
++        raise ValueError("TB-GAE bootstrap schedule cannot drop probes")
++    while len(tokens) < padded_count:
++        tokens.append(torch.tensor([0, 0], dtype=torch.long, device=device))
++        masks.append(torch.ones(1, dtype=torch.int, device=device))
++        lengths.append(2)
++    batch = dict(
++        tokens=tokens,
++        loss_masks=masks,
++        total_lengths=lengths,
++        response_lengths=[1] * len(tokens),
++        micro_batch_indices=[[i] for i in range(len(tokens))],
++        num_microbatches=[len(tokens)],
++        global_batch_sizes=[len(tokens)],
++    )
++    return batch, required
++
++
++@torch.no_grad()
++def compute_bootstrap_values(args, model, rollout_data, *, forward_fn=None):
++    from megatron.core import mpu
++    from megatron.core.utils import get_model_config
++
++    from slime.backends.megatron_utils.cp_utils import all_gather_with_cp
++    from slime.backends.megatron_utils.data import get_data_iterator
++    from slime.backends.megatron_utils.loss import get_values
++    from slime.backends.megatron_utils.model import forward_only
++    from slime.utils.distributed_utils import get_gloo_group
++
++    if getattr(args, "enable_tb_gae", False) is not True:
++        raise ValueError("Bootstrap forward requires explicit TB-GAE opt-in")
++    # All model-parallel ranks run the same probes, even if their CP response is empty.
++    # One probe per microbatch avoids packing many long successor states into
++    # a bin sized using the (possibly short) original response. Equal counts
++    # across DP and PP keep forward collectives/schedules aligned.
++    count = torch.tensor(len(rollout_data["tb_boundary"]), dtype=torch.long)
++    dist.all_reduce(count, op=dist.ReduceOp.MAX, group=get_gloo_group())
++    quantum = getattr(get_model_config(model[0]), "microbatch_group_size_per_vp_stage", 1) or 1
++    padded_count = ((int(count) + quantum - 1) // quantum) * quantum
++    batch, required = make_bootstrap_batch(
++        rollout_data,
++        device=rollout_data["tokens"][0].device,
++        max_tokens=args.seq_length,
++        padded_count=padded_count,
++    )
++    # Never skip independently per DP rank: DDP/PP parameter synchronization
++    # may still run during forward. Every replica uses the original schedule.
++    local_args = copy.copy(args)
++    local_args.use_rollout_entropy = False
++    # Preserve rollout sample order for fixed and dynamic microbatch schedules.
++    local_args.use_dynamic_batch_size = True
++    local_args.micro_batch_size = 1
++    result = (forward_fn or forward_only)(
++        get_values,
++        local_args,
++        model,
++        get_data_iterator(batch),
++        batch["num_microbatches"],
++    )
++    if not mpu.is_pipeline_last_stage():
++        return None
++    values = []
++    for i, (total, local) in enumerate(zip(batch["total_lengths"], result["values"], strict=True)):
++        full = all_gather_with_cp(local.detach(), total, 1).detach()
++        if full.numel() != 1 or not torch.isfinite(full).all():
++            raise ValueError("TB-GAE successor critic forward returned an invalid value")
++        if i < len(required):
++            values.append(float(full.item()) if required[i] else 0.0)
++    return values
+--- a/harbor/src/harbor/agents/terminus_2/terminus_2.py
++++ b/harbor/src/harbor/agents/terminus_2/terminus_2.py
+@@ -70,7 +70,7 @@
+ 
+ class Terminus2(BaseAgent):
+     SUPPORTS_ATIF: bool = True
+-    TERMINATION_METADATA_VERSION: int = 1
++    TERMINATION_METADATA_VERSION: int = 2
+ 
+     def _init_llm(
+         self,
+@@ -1015,6 +1015,9 @@
+ 
+         try:
+             start_time = time.time()
++            if getattr(self, "_record_termination_metadata", False) is True:
++                self._tb_next_prompt = prompt
++                self._tb_state_messages = list(chat.messages)
+             llm_response = await chat.chat(
+                 prompt,
+                 logging_path=logging_path,
+@@ -1088,6 +1091,9 @@
+ 
+             try:
+                 start_time = time.time()
++                if getattr(self, "_record_termination_metadata", False) is True:
++                    self._tb_next_prompt = summary_prompt
++                    self._tb_state_messages = list(chat.messages)
+                 llm_response = await chat.chat(
+                     summary_prompt,
+                     logging_path=logging_path,
+@@ -1276,6 +1282,10 @@
+             raise RuntimeError("Agent context is not set. This should never happen.")
+ 
+         prompt = initial_prompt
++        if getattr(self, "_record_termination_metadata", False) is True:
++            self._tb_next_prompt = prompt
++            self._tb_observation_pending = False
++            self._tb_state_messages = list(chat.messages)
+ 
+         self._context.n_input_tokens = 0
+         self._context.n_output_tokens = 0
+@@ -1310,6 +1320,8 @@
+                     self._pending_handoff_prompt = prompt
+ 
+             logging_paths = self._setup_episode_logging(logging_dir, episode)
++            if getattr(self, "_record_termination_metadata", False) is True:
++                self._tb_next_prompt = prompt
+ 
+             # Track token counts and cost before this step
+             tokens_before_input = chat.total_input_tokens
+@@ -1327,6 +1339,8 @@
+             ) = await self._handle_llm_interaction(
+                 chat, prompt, logging_paths, original_instruction, self._session
+             )
++            if getattr(self, "_record_termination_metadata", False) is True:
++                self._tb_observation_pending = True
+ 
+             # If we have pending subagent refs, add a system step to record the delegation
+             # This must happen before we build the agent step
+@@ -1397,6 +1411,10 @@
+                     f"Please fix these issues and provide a proper "
+                     f"{self._get_error_response_type()}."
+                 )
++                if getattr(self, "_record_termination_metadata", False) is True:
++                    self._tb_next_prompt = prompt
++                    self._tb_observation_pending = False
++                    self._tb_state_messages = list(chat.messages)
+                 # For error cases, we still want to record the step
+                 # Use the raw response as the message since parsing failed
+                 cache_tokens_used = chat.total_cache_tokens - tokens_before_cache
+@@ -1463,6 +1481,10 @@
+                     observation = self._limit_output_length(terminal_output)
+ 
+             # Record the step in trajectory
++            if getattr(self, "_record_termination_metadata", False) is True:
++                self._tb_next_prompt = observation
++                self._tb_observation_pending = False
++                self._tb_state_messages = list(chat.messages)
+             cache_tokens_used = chat.total_cache_tokens - tokens_before_cache
+             step_cost = chat.total_cost - cost_before
+ 
+@@ -1616,6 +1638,9 @@
+         # Reset before setup as well as the loop: instances may be reused and
+         # even initial terminal I/O or skills loading can be cancelled/fail.
+         self._record_termination("unknown", "run_not_finished")
++        self._tb_next_prompt = None
++        self._tb_observation_pending = False
++        self._tb_state_messages = []
+         try:
+             await self._run_without_termination_tracking(
+                 instruction, environment, context
+@@ -1644,6 +1669,50 @@
+                 "termination_reason": self._termination_reason,
+                 "termination_metadata_version": self.TERMINATION_METADATA_VERSION,
+             }
++            if self._termination_kind == "truncated":
++                await self._capture_bootstrap_state(context)
++
++    async def _capture_bootstrap_state(self, context: AgentContext) -> None:
++        """Capture the actual post-action state, including timeout during tools.
++
++        No generation and no new action is performed. On unavailable state we
++        record an explicit error; the learner must never substitute V(last action).
++        """
++        metadata = context.metadata
++        if metadata is None:
++            metadata = {}
++            context.metadata = metadata
++        try:
++            if self._chat is None or not self._chat.rollout_details:
++                raise ValueError("No completed action to bootstrap")
++            if self._tb_observation_pending:
++                if self._session is None:
++                    raise ValueError("Terminal session unavailable at truncation")
++                observation = await asyncio.wait_for(
++                    self._session.get_incremental_output(), timeout=2.0
++                )
++                self._tb_next_prompt = self._limit_output_length(observation)
++                self._tb_observation_pending = False
++                self._tb_state_messages = list(self._chat.messages)
++            if self._tb_next_prompt is None:
++                raise ValueError("Next decision prompt unavailable")
++            encoder = getattr(self._llm, "encode_bootstrap_state", None)
++            if encoder is None:
++                raise ValueError("LLM backend has no encode_bootstrap_state")
++            tokens = encoder(
++                self._tb_next_prompt, message_history=self._tb_state_messages
++            )
++            if not tokens:
++                raise ValueError("Bootstrap state encoded to empty tokens")
++            metadata["bootstrap_token_ids"] = tokens
++            metadata["bootstrap_action_count"] = sum(
++                len(turn)
++                for turn in self._chat.rollout_details[0].get(
++                    "completion_token_ids", []
++                )
++            )
++        except Exception as exc:
++            metadata["bootstrap_error"] = f"{type(exc).__name__}: {exc}"
+ 
+     async def _run_without_termination_tracking(
+         self,
+--- /dev/null
++++ b/slime-terminal-RL/tests/test_tb_gae_bootstrap.py
+@@ -0,0 +1,284 @@
++"""CPU tests for successor values, full-episode GAE, and action-preserving chunks."""
++
++from types import SimpleNamespace
++
++import pytest
++import torch
++import torch.distributed as dist
++from tb_gae_test_utils import cpu_mpu, detail, tb_args  # noqa: F401
++
++from slime.backends.megatron_utils.tb_gae_bootstrap import make_bootstrap_batch
++from slime.utils.types import Sample
++from slime_plugins.harbor.atif_adapter import samples_from_rollout_details
++from slime_plugins.harbor.tb_gae import compute_tb_gae, tb_gae_advantage
++from slime_plugins.harbor.tb_gae_boundary import solve_episode_boundaries
++from slime_plugins.harbor.tb_gae_chunks import split_tb_samples
++from slime_plugins.harbor.tb_gae_data import validate_and_collect_tb_masks
++
++NUM_GPUS = 0
++pytestmark = pytest.mark.unit
++# Imported pytest fixtures are intentionally shadowed by test parameters.
++# ruff: noqa: F811
++
++
++def episode_samples(*, terminal, split=False, episode=1):
++    kw = dict(harbor_termination_kind="terminated" if terminal else "truncated")
++    if not terminal:
++        kw.update(harbor_bootstrap_token_ids=[71, 72, 73], harbor_bootstrap_action_count=3)
++    return samples_from_rollout_details(
++        [detail("split" if split else "normal")],
++        Sample(index=episode, group_id=episode),
++        reward=0.7,
++        status=Sample.Status.COMPLETED if terminal else Sample.Status.TRUNCATED,
++        mode="trajectory_retokenized",
++        enable_tb_gae=True,
++        metadata=kw,
++    )
++
++
++@pytest.mark.parametrize("terminal", [False, True])
++@pytest.mark.parametrize("split", [False, True])
++@pytest.mark.parametrize("gamma", [1.0, 0.999])
++def test_full_episode_matches_unsplit_reference(cpu_mpu, monkeypatch, terminal, split, gamma):
++    monkeypatch.setattr(cpu_mpu, "get_data_parallel_group_gloo", lambda **kw: dist.group.WORLD)
++    samples = episode_samples(terminal=terminal, split=split)
++    fields = validate_and_collect_tb_masks(samples, [s.loss_mask for s in samples])
++    values = [torch.linspace(0.1 + i / 10, 0.4 + i / 10, s.response_length) for i, s in enumerate(samples)]
++    data = dict(
++        fields,
++        values=values,
++        rewards=[0.7] * len(samples),
++        loss_masks=[torch.tensor(s.loss_mask) for s in samples],
++        response_lengths=[s.response_length for s in samples],
++        total_lengths=[len(s.tokens) for s in samples],
++        tb_bootstrap_values=[0.8] * len(samples),
++    )
++    full_v = torch.cat(values)[None]
++    full_a = torch.cat([torch.tensor(s.loss_mask).bool() for s in samples])[None]
++    full_te = torch.cat([torch.tensor(s.metadata["turn_end_mask"]) for s in samples])[None]
++    full_dn = torch.cat([torch.tensor(s.metadata["is_real_done"]) for s in samples])[None]
++    reward = torch.zeros_like(full_v)
++    reward[0, -1] = 0.7
++    expected = compute_tb_gae(
++        full_v,
++        reward,
++        full_a,
++        full_te,
++        full_dn,
++        gamma,
++        gamma,
++        bootstrap_values=torch.tensor([0.8]),
++        continuation_advantages=torch.zeros(1),
++    )
++    tb_gae_advantage(tb_args(tb_gae_gamma_turn=gamma, tb_gae_lambda_turn=gamma), data)
++    torch.testing.assert_close(torch.cat(data["advantages"]), expected[0][0], atol=1e-6, rtol=1e-6)
++    torch.testing.assert_close(torch.cat(data["returns"]), expected[1][0], atol=1e-6, rtol=1e-6)
++    if not terminal and gamma == 1.0:
++        torch.testing.assert_close(torch.cat(data["returns"])[full_a[0]], torch.full((3,), 1.5))
++
++
++@pytest.mark.parametrize("cap", [3, 4, 5, 6, 8])
++@pytest.mark.parametrize("terminal", [False, True])
++def test_hard_cap_keeps_all_action_tokens_and_endpoints(cap, terminal):
++    samples = episode_samples(terminal=terminal)
++    expected = [
++        t for s in samples for t, active in zip(s.tokens[-s.response_length :], s.loss_mask, strict=True) if active
++    ]
++    original_turns = sum(s.metadata["turn_end_mask"].sum() for s in samples)
++    split_tb_samples(samples, cap)
++    actual = [
++        t for s in samples for t, active in zip(s.tokens[-s.response_length :], s.loss_mask, strict=True) if active
++    ]
++    assert actual == expected
++    assert all(len(s.tokens) <= cap for s in samples)
++    assert sum(s.metadata["turn_end_mask"].sum() for s in samples) == original_turns
++    assert sum(s.metadata["is_real_done"].sum() for s in samples) == int(terminal)
++    if not terminal:
++        assert samples[-1].metadata["tb_boundary"]["bootstrap_token_ids"] == [71, 72, 73]
++    assert [s.metadata["tb_boundary"]["chunk_index"] for s in samples] == list(range(len(samples)))
++    validate_and_collect_tb_masks(samples, [s.loss_mask for s in samples])
++
++
++def test_bootstrap_probe_selects_successor_not_last_action(cpu_mpu):
++    from slime.backends.megatron_utils.loss import get_values
++
++    data = {
++        "tb_boundary": [dict(terminal=False, chunk_index=0, chunk_count=1, bootstrap_token_ids=[3, 7, 11])],
++        "micro_batch_indices": [[0]],
++        "num_microbatches": [1],
++        "global_batch_sizes": [1],
++    }
++    batch, required = make_bootstrap_batch(data, device="cpu", max_tokens=64, padded_count=2)
++    assert batch["tokens"][0].tolist() == [3, 7, 11, 0]
++    assert required == [True] and batch["tokens"][1].tolist() == [0, 0]
++    # Causal toy critic: state value = sum(prefix). Dummy token must not shift target.
++    logits = batch["tokens"][0].float().cumsum(0)[None, :, None]
++    _, result = get_values(
++        logits, args=tb_args(), unconcat_tokens=[batch["tokens"][0]], total_lengths=[4], response_lengths=[1]
++    )
++    assert result["values"][0].item() == 21.0
++
++
++def test_bootstrap_real_forward_callback_and_schedule(cpu_mpu, monkeypatch):
++    import megatron.core.utils
++
++    from slime.backends.megatron_utils import model as model_utils
++    from slime.backends.megatron_utils.tb_gae_bootstrap import compute_bootstrap_values
++    from slime.utils import distributed_utils
++
++    monkeypatch.setattr(distributed_utils, "get_gloo_group", lambda: dist.group.WORLD)
++    # Production get_batch uses .cuda() for packed-sequence lengths. Keep its
++    # actual packing/slicing math but leave that metadata on CPU in this test.
++    monkeypatch.setattr(torch.Tensor, "cuda", lambda self, *args, **kwargs: self)
++    monkeypatch.setattr(cpu_mpu, "get_virtual_pipeline_model_parallel_world_size", lambda: None)
++    config = SimpleNamespace(timers=None, microbatch_group_size_per_vp_stage=1)
++    monkeypatch.setattr(megatron.core.utils, "get_model_config", lambda model: config)
++    monkeypatch.setattr(model_utils, "get_model_config", lambda model: config)
++    monkeypatch.setattr(model_utils, "_disable_tqdm_for_non_main_rank", lambda: True)
++    monkeypatch.setattr(model_utils, "_wrap_forward_step_with_microbatch_pbar", lambda fn, bar: fn)
++
++    class Critic:
++        def eval(self):
++            pass
++
++        def train(self):
++            pass
++
++        def __call__(self, **kw):
++            return kw["input_ids"].float().cumsum(1)[..., None]
++
++    def scheduler(**kw):
++        output = []
++        assert kw["micro_batch_size"] == 1
++        for _ in range(kw["num_microbatches"]):
++            logits, callback = kw["forward_step_func"](kw["data_iterator"][0], kw["model"][0])
++            _, result = callback(logits)
++            output.append(result)
++        return output
++
++    monkeypatch.setattr(model_utils, "get_forward_backward_func", lambda: scheduler)
++    data = {
++        "tokens": [torch.tensor([1, 2]), torch.tensor([1, 2])],
++        "tb_boundary": [
++            dict(terminal=False, chunk_index=0, chunk_count=1, bootstrap_token_ids=[3, 7, 11]),
++            dict(terminal=True, chunk_index=0, chunk_count=1, bootstrap_token_ids=None),
++        ],
++    }
++    args = tb_args(
++        seq_length=64,
++        data_pad_size_multiplier=1,
++        use_rollout_entropy=False,
++        custom_megatron_before_log_prob_hook_path=None,
++        micro_batch_size=1,
++    )
++    assert compute_bootstrap_values(args, [Critic()], data) == [21.0, 0.0]
++
++
++def test_missing_or_conflicting_boundaries_fail():
++    row = dict(
++        episode="a",
++        chunk_index=0,
++        chunk_count=2,
++        terminal=False,
++        active=True,
++        outcome=0.7,
++        base=0.0,
++        first_value=0.2,
++        value_coefficient=1.0,
++        advantage_coefficient=1.0,
++        bootstrap=None,
++    )
++    with pytest.raises(ValueError, match="incomplete"):
++        solve_episode_boundaries([row])
++    second = dict(row, chunk_index=1, bootstrap=0.8)
++    assert solve_episode_boundaries([second, row])[("a", 1)] == (0.8, 0.0)
++    with pytest.raises(ValueError, match="outcome"):
++        solve_episode_boundaries([row, dict(second, outcome=0.3)])
++    with pytest.raises(ValueError, match="finite old-critic"):
++        solve_episode_boundaries([row, dict(second, bootstrap=None)])
++
++
++def test_incomplete_episode_rejected_before_dp():
++    samples = episode_samples(terminal=False, split=True)
++    with pytest.raises(ValueError, match="incomplete"):
++        validate_and_collect_tb_masks(samples[1:], [samples[1].loss_mask])
++
++
++def test_real_critic_lifecycle_bootstraps_before_update(cpu_mpu, monkeypatch):
++    from slime.backends.megatron_utils import actor as module
++    from slime.backends.megatron_utils import tb_gae_bootstrap
++
++    events = []
++    current_weight = [1.0]
++    model = object.__new__(module.MegatronTrainRayActor)
++    model.args = tb_args()
++    model.model = [object()]
++    model.optimizer = model.opt_param_scheduler = None
++    data = {"num_microbatches": [1], "global_batch_sizes": [1], "micro_batch_indices": [[0]]}
++    monkeypatch.setattr(module, "get_data_iterator", lambda data: [])
++
++    def forward(*unused):
++        events.append("old_values")
++        return {"values": [torch.tensor([current_weight[0]])]}
++
++    def bootstrap(*unused):
++        events.append("bootstrap")
++        return [current_weight[0] * 2]
++
++    def advantages(args, payload):
++        events.append("targets")
++        assert payload["tb_bootstrap_values"] == [2.0]
++        assert payload["values"][0].item() == 1.0
++
++    def update(*unused):
++        events.append("optimizer")
++        current_weight[0] = 99.0
++
++    monkeypatch.setattr(module, "forward_only", forward)
++    monkeypatch.setattr(tb_gae_bootstrap, "compute_bootstrap_values", bootstrap)
++    monkeypatch.setattr(module, "compute_advantages_and_returns", advantages)
++    monkeypatch.setattr(module, "train", update)
++    result = model.train_critic(0, data)
++    assert events == ["old_values", "bootstrap", "targets", "optimizer"]
++    assert result["tb_bootstrap_values"] == [2.0] and result["values"][0].item() == 1.0
++
++
++def test_actor_receives_old_bootstrap_without_new_critic_forward(cpu_mpu, monkeypatch):
++    from contextlib import nullcontext
++
++    from slime.backends.megatron_utils import actor as module
++
++    instance = object.__new__(module.MegatronTrainRayActor)
++    instance.args = tb_args(
++        use_rollout_routing_replay=False,
++        use_routing_replay=False,
++        use_rollout_logprobs=True,
++        offload_train=False,
++        loss_type="policy_loss",
++        ref_update_interval=None,
++    )
++    instance.model = [object()]
++    instance.optimizer = instance.opt_param_scheduler = None
++    instance.weights_backuper = SimpleNamespace(backup_tags=[], backup=lambda tag: None)
++    instance.prof = SimpleNamespace(step=lambda **kw: None)
++    instance.weight_updater = SimpleNamespace(pop_metrics=lambda: {})
++    instance.rollout_data_postprocess = None
++    instance._active_model_tag = "actor"
++    instance._switch_model = lambda tag: None
++    monkeypatch.setattr(module, "timer", lambda *args: nullcontext())
++    monkeypatch.setattr(module, "inverse_timer", lambda *args: nullcontext())
++    monkeypatch.setattr(module, "get_data_iterator", lambda data: [])
++    monkeypatch.setattr(module, "log_rollout_data", lambda *args: None)
++    monkeypatch.setattr(module, "train", lambda *args: None)
++    monkeypatch.setattr(module.train_dump_utils, "save_debug_train_data", lambda *args, **kw: None)
++    monkeypatch.setattr(module, "log_perf_data", lambda *args, **kw: None)
++    from slime.backends.megatron_utils import data as data_module
++
++    monkeypatch.setattr(data_module, "tensors_to_gpu", lambda values: values)
++    seen = []
++    monkeypatch.setattr(
++        module, "compute_advantages_and_returns", lambda args, data: seen.append(data["tb_bootstrap_values"])
++    )
++    source = {"num_microbatches": [1], "global_batch_sizes": [1], "micro_batch_indices": [[0]]}
++    instance.train_actor(0, source, external_data={"values": [torch.tensor([0.2])], "tb_bootstrap_values": [0.8]})
++    assert seen == [[0.8]]
+--- /dev/null
++++ b/slime-terminal-RL/tests/test_tb_gae_bootstrap_agent.py
+@@ -0,0 +1,186 @@
++"""Actual agent truncation events produce successor states without generation."""
++
++import asyncio
++import json
++from types import SimpleNamespace
++from unittest.mock import AsyncMock
++
++import pytest
++from test_tb_gae_termination_smoke import convert, execute, make_agent
++
++from harbor.models.agent.context import AgentContext
++from slime_plugins.harbor.llm import SlimeSGLangLLM
++from slime_plugins.harbor.tb_gae_data import validate_and_collect_tb_masks
++
++NUM_GPUS = 0
++pytestmark = pytest.mark.unit
++
++
++def test_encoder_uses_exact_rollout_chat_template_without_network():
++    llm = object.__new__(SlimeSGLangLLM)
++    seen = []
++
++    class Tokenizer:
++        def apply_chat_template(self, messages, **kwargs):
++            seen.append((messages, kwargs))
++            return [11, 22, 33]
++
++    llm._tokenizer = Tokenizer()
++    llm._add_generation_prompt = True
++    llm._apply_chat_template_kwargs = {"enable_thinking": False}
++    history = [{"role": "user", "content": "task"}, {"role": "assistant", "content": "action"}]
++    actual = llm.encode_bootstrap_state("post-action observation", message_history=history)
++    assert actual == llm._encode_messages([*history, {"role": "user", "content": "post-action observation"}])
++    assert seen[0] == seen[1] and seen[0][1]["add_generation_prompt"] is True
++
++
++@pytest.mark.parametrize("replies", [[False, False], [True, False], [False, True]])
++def test_max_turns_keeps_trajectory_with_nonterminal_masks(monkeypatch, tmp_path, replies):
++    agent, llm = make_agent(monkeypatch, tmp_path, replies, max_turns=2)
++    context = execute(agent)
++    assert llm.calls == 2
++    assert context.metadata["bootstrap_action_count"] == 4
++    assert llm.bootstrap_messages[-1]["role"] == "user"
++    assert "terminal ready" in llm.bootstrap_messages[-1]["content"]
++    samples = convert(context)
++    data = validate_and_collect_tb_masks(samples, [s.loss_mask for s in samples])
++    assert sum(sum(s.loss_mask) for s in samples) == 4
++    assert not data["is_real_done"][0].any()
++    assert data["tb_boundary"][0]["bootstrap_token_ids"] == context.metadata["bootstrap_token_ids"]
++
++
++def test_timeout_waiting_for_next_model_response_preserves_last_observation(monkeypatch, tmp_path):
++    agent, llm = make_agent(monkeypatch, tmp_path, [False, "wait"])
++    context = AgentContext()
++
++    async def run():
++        with pytest.raises(TimeoutError):
++            await asyncio.wait_for(agent.run("task", SimpleNamespace(), context), timeout=0.03)
++
++    asyncio.run(run())
++    assert context.metadata["bootstrap_action_count"] == 2
++    assert llm.calls == 1
++    assert llm.bootstrap_messages[-1]["content"] == "terminal ready"
++    assert len(convert(context)) == 1
++
++
++def test_timeout_during_tool_collects_actual_terminal_observation(monkeypatch, tmp_path):
++    agent, llm = make_agent(monkeypatch, tmp_path, [False])
++    original = llm.call
++
++    async def with_command(*args, **kw):
++        response = await original(*args, **kw)
++        response.content = json.dumps(
++            {
++                "analysis": "run",
++                "plan": "wait",
++                "commands": [{"keystrokes": "long-running", "duration": 1}],
++                "task_complete": False,
++            }
++        )
++        return response
++
++    llm.call = with_command
++
++    async def slow_tool(*args, **kw):
++        await asyncio.Event().wait()
++
++    agent._session.send_keys = slow_tool
++    agent._session.get_incremental_output = AsyncMock(side_effect=["before", "partial tool result at timeout"])
++    context = AgentContext()
++
++    async def run():
++        with pytest.raises(TimeoutError):
++            await asyncio.wait_for(agent.run("task", SimpleNamespace(), context), timeout=0.03)
++
++    asyncio.run(run())
++    assert context.metadata["termination_kind"] == "truncated"
++    assert llm.bootstrap_messages[-1]["content"] == "partial tool result at timeout"
++    assert context.metadata["bootstrap_action_count"] == 2
++    assert not convert(context)[0].metadata["is_real_done"].any()
++
++
++def test_real_trial_timeout_exception_is_accepted_with_successor(monkeypatch, tmp_path):
++    from harbor.models.trial.result import ExceptionInfo
++    from harbor.trial.trial import AgentTimeoutError, Trial
++    from slime.utils.types import Sample
++    from slime_plugins.harbor.atif_adapter import samples_from_trial_result
++
++    agent, _ = make_agent(monkeypatch, tmp_path, [False, "wait"])
++    trial = object.__new__(Trial)
++    trial._agent, trial._environment = agent, SimpleNamespace()
++    trial._task = SimpleNamespace(instruction="task")
++    trial._result = SimpleNamespace(agent_result=None, agent_execution=None)
++    trial._agent_timeout_sec = 0.03
++    trial._invoke_hooks = AsyncMock()
++    try:
++        asyncio.run(trial._execute_agent())
++    except AgentTimeoutError as exc:
++        exception = ExceptionInfo.from_exception(exc)
++    result = {
++        "agent_result": trial.result.agent_result,
++        "exception_info": exception,
++        "verifier_result": {"rewards": {"reward": 0.3}},
++    }
++    samples = samples_from_trial_result(result, Sample(index=9), mode="trajectory_retokenized", enable_tb_gae=True)
++    assert samples[0].status == Sample.Status.TRUNCATED
++    assert samples[0].metadata["tb_boundary"]["bootstrap_token_ids"]
++
++
++def test_mixed_rollout_keeps_natural_maxturns_and_timeout_without_backfill(monkeypatch, tmp_path):
++    from slime.utils.types import Sample
++    from slime_plugins.harbor import rollout
++
++    completed, _ = make_agent(monkeypatch, tmp_path, [True, True], max_turns=2)
++    capped, _ = make_agent(monkeypatch, tmp_path, [False, False], max_turns=2)
++    waiting, _ = make_agent(monkeypatch, tmp_path, [False, "wait"])
++    contexts = [execute(completed), execute(capped)]
++    timeout_context = AgentContext()
++
++    async def wait():
++        with pytest.raises(TimeoutError):
++            await asyncio.wait_for(waiting.run("task", SimpleNamespace(), timeout_context), timeout=0.03)
++
++    asyncio.run(wait())
++    contexts.append(timeout_context)
++    calls = []
++
++    async def trial(args, rid, gid, rank, base, semaphore):
++        calls.append(gid)
++        samples = convert(contexts[gid])
++        for s in samples:
++            s.group_id = gid
++            s.metadata["tb_boundary"]["episode"] = str(gid)
++        return samples
++
++    class Source:
++        def __init__(self):
++            self.requests = []
++
++        def get_samples(self, n):
++            self.requests.append(n)
++            return [[Sample(index=i)] for i in range(n)]
++
++    monkeypatch.setattr(rollout, "_run_one_with_semaphore", trial)
++    args = SimpleNamespace(
++        enable_tb_gae=True,
++        enable_score_centering=False,
++        rollout_batch_size=3,
++        over_sampling_batch_size=3,
++        n_samples_per_prompt=1,
++        harbor_num_concurrent_trials=3,
++        harbor_retry_missing_samples=0,
++        harbor_fail_on_trial_error=False,
++        harbor_require_full_rollout_groups=True,
++        harbor_sample_mode="trajectory_retokenized",
++        rollout_sample_filter_path=None,
++        rollout_all_samples_process_path=None,
++    )
++    source = Source()
++    output = asyncio.run(rollout._generate_rollout_async(args, 0, source))
++    samples = [s for group in output["samples"] for s in group]
++    assert source.requests == [3] and sorted(calls) == [0, 1, 2]
++    assert len(samples) == 3
++    assert sum(s.metadata["tb_boundary"]["terminal"] for s in samples) == 1
++    assert output["metrics"]["harbor/num_failed_trials"] == 0
++    validate_and_collect_tb_masks(samples, [s.loss_mask for s in samples])
+--- /dev/null
++++ b/slime-terminal-RL/tests/test_tb_gae_bootstrap_distributed.py
+@@ -0,0 +1,24 @@
++import time
++
++import pytest
++import torch.multiprocessing as mp
++
++from tb_gae_bootstrap_distributed_worker import worker
++
++NUM_GPUS = 0
++pytestmark = pytest.mark.unit
++
++
++@pytest.mark.parametrize("cp_size", [1, 4])
++def test_cross_dp_chunk_continuation_with_real_cp_gloo(cp_size, tmp_path):
++    context = mp.spawn(worker, args=(cp_size, (tmp_path / "gloo").as_uri()), nprocs=2 * cp_size, join=False)
++    deadline = time.monotonic() + 180
++    try:
++        while not context.join(timeout=1):
++            if time.monotonic() > deadline:
++                pytest.fail("TB-GAE DP/CP continuation timed out")
++    finally:
++        for p in context.processes:
++            if p.is_alive():
++                p.terminate()
++            p.join(timeout=5)
+--- /dev/null
++++ b/slime-terminal-RL/tests/tb_gae_bootstrap_distributed_worker.py
+@@ -0,0 +1,172 @@
++"""CPU/Gloo DP=2 x CP=1/4; chunks of one episode live on different DP ranks."""
++
++from datetime import timedelta
++
++import torch
++import torch.distributed as dist
++
++
++def worker(rank, cp_size, rendezvous):
++    torch.set_num_threads(1)
++    dist.init_process_group(
++        "gloo", init_method=rendezvous, rank=rank, world_size=2 * cp_size, timeout=timedelta(seconds=90)
++    )
++    try:
++        from megatron.core import mpu
++        from tb_gae_test_utils import tb_args
++
++        from slime.backends.megatron_utils.cp_utils import slice_log_prob_with_cp
++        from slime_plugins.harbor.tb_gae import compute_tb_gae, tb_gae_advantage
++
++        dp_rank, cp_rank = rank // cp_size, rank % cp_size
++        cp_group = dp_group = None
++        for d in range(2):
++            group = dist.new_group(list(range(d * cp_size, (d + 1) * cp_size)), backend="gloo")
++            if d == dp_rank:
++                cp_group = group
++        for c in range(cp_size):
++            group = dist.new_group([c, cp_size + c], backend="gloo")
++            if c == cp_rank:
++                dp_group = group
++        mpu.get_context_parallel_world_size = lambda: cp_size
++        mpu.get_context_parallel_rank = lambda: cp_rank
++        mpu.get_context_parallel_group = lambda: cp_group
++        mpu.get_data_parallel_group_gloo = lambda **kw: dp_group
++
++        # Real bootstrap callback, native packing/get_values and CP gather.
++        # Pipeline scheduler/model are CPU test doubles; DP counts are unequal.
++        from types import SimpleNamespace
++
++        import megatron.core.utils
++
++        from slime.backends.megatron_utils import model as model_utils
++        from slime.backends.megatron_utils.tb_gae_bootstrap import compute_bootstrap_values
++        from slime.utils import distributed_utils
++
++        mpu.get_tensor_model_parallel_world_size = lambda: 1
++        mpu.get_virtual_pipeline_model_parallel_world_size = lambda: None
++        mpu.is_pipeline_last_stage = lambda **kw: True
++        distributed_utils.get_gloo_group = lambda: dist.group.WORLD
++        config = SimpleNamespace(timers=None, microbatch_group_size_per_vp_stage=2)
++        megatron.core.utils.get_model_config = lambda model: config
++        model_utils.get_model_config = lambda model: config
++        model_utils._disable_tqdm_for_non_main_rank = lambda: True
++        model_utils._wrap_forward_step_with_microbatch_pbar = lambda fn, bar: fn
++        torch.Tensor.cuda = lambda self, *args, **kw: self
++        schedules = []
++
++        class ToyCritic:
++            def eval(self):
++                pass
++
++            def train(self):
++                pass
++
++            def __call__(self, **kw):
++                # A local causal state function that requires no fake CP allgather.
++                return kw["input_ids"].float()[..., None] * 2
++
++        def scheduler(**kw):
++            schedules.append(kw["num_microbatches"])
++            results = []
++            for _ in range(kw["num_microbatches"]):
++                logits, callback = kw["forward_step_func"](kw["data_iterator"][0], kw["model"][0])
++                _, result = callback(logits)
++                results.append(result)
++            return results
++
++        model_utils.get_forward_backward_func = lambda: scheduler
++        nlocal = 2 if dp_rank == 0 else 3
++        probe_data = {
++            "tokens": [torch.tensor([1, 2])] * nlocal,
++            "tb_boundary": [
++                dict(terminal=False, chunk_index=0, chunk_count=1, bootstrap_token_ids=[7, 8, 11 + i])
++                for i in range(nlocal)
++            ],
++        }
++        probe_args = tb_args(
++            seq_length=64,
++            data_pad_size_multiplier=1,
++            use_rollout_entropy=False,
++            custom_megatron_before_log_prob_hook_path=None,
++            micro_batch_size=1,
++        )
++        actual_bootstrap = compute_bootstrap_values(probe_args, [ToyCritic()], probe_data)
++        assert actual_bootstrap == [2.0 * (11 + i) for i in range(nlocal)]
++        assert schedules == [4]  # Max count 3 rounded to VPP group multiple 2.
++
++        # Uneven local sample counts and chunks out of order; include tiny CP shards.
++        slices = [(0, 3), (3, 10), (10, 11), (11, 20), (20, 25)]
++        owner = [0, 1, 0, 1, 1]
++        values = torch.sin(torch.arange(25, dtype=torch.float64))
++        action = torch.ones(25, dtype=torch.bool)
++        action[[1, 5, 8, 13, 18, 22]] = False
++        turns = torch.zeros_like(action)
++        turns[[2, 7, 10, 17, 24]] = True
++        for terminal in (False, True):
++            for gamma in (1.0, 0.999):
++                done = torch.zeros_like(action)
++                done[-1] = terminal
++                reward = torch.zeros_like(values)
++                reward[-1] = 0.7
++                expected = compute_tb_gae(
++                    values[None],
++                    reward[None],
++                    action[None],
++                    turns[None],
++                    done[None],
++                    gamma,
++                    gamma,
++                    bootstrap_values=torch.tensor([0.8], dtype=torch.float64),
++                    continuation_advantages=torch.zeros(1, dtype=torch.float64),
++                )
++                data = {
++                    k: []
++                    for k in (
++                        "values",
++                        "rewards",
++                        "loss_masks",
++                        "turn_end_mask",
++                        "is_real_done",
++                        "tb_boundary",
++                        "tb_bootstrap_values",
++                        "total_lengths",
++                        "response_lengths",
++                    )
++                }
++                indices = [i for i in reversed(range(len(slices))) if owner[i] == dp_rank]
++                for i in indices:
++                    start, stop = slices[i]
++                    response = stop - start
++                    total = response + (1 if i == 2 else 7)
++                    data["values"].append(
++                        slice_log_prob_with_cp(values[start:stop], total, response).clone().requires_grad_()
++                    )
++                    data["rewards"].append(0.7)
++                    data["loss_masks"].append(action[start:stop])
++                    data["turn_end_mask"].append(turns[start:stop])
++                    data["is_real_done"].append(done[start:stop])
++                    data["tb_boundary"].append(
++                        dict(
++                            episode="shared",
++                            chunk_index=i,
++                            chunk_count=len(slices),
++                            terminal=terminal and i == len(slices) - 1,
++                        )
++                    )
++                    data["tb_bootstrap_values"].append(0.8 if i == len(slices) - 1 else 0.0)
++                    data["total_lengths"].append(total)
++                    data["response_lengths"].append(response)
++                args = tb_args(context_parallel_size=cp_size, tb_gae_gamma_turn=gamma, tb_gae_lambda_turn=gamma)
++                tb_gae_advantage(args, data)
++                for local_i, i in enumerate(indices):
++                    start, stop = slices[i]
++                    total, response = data["total_lengths"][local_i], stop - start
++                    for key, ref in zip(("advantages", "returns"), expected, strict=True):
++                        local_ref = slice_log_prob_with_cp(ref[0, start:stop], total, response)
++                        got = data[key][local_i]
++                        torch.testing.assert_close(got, local_ref, atol=1e-12, rtol=1e-12)
++                        assert got.shape == data["values"][local_i].shape
++                        assert not got.requires_grad and got.grad_fn is None
++    finally:
++        dist.destroy_process_group()

@@ -1,0 +1,226 @@
+# mix3way config -- Qwen3.5-122B-A10B PPO on 120 GPU (15 nodes x 8 H20) on the sh9 share.
+# STANDARD (skim-oversample) rollout, DAYTONA backend, hybrid GDN CP=4, batch 512,
+# 64k context on BOTH sides, CTRF DENSE (partial/process) reward.
+# COLD actor (RST torch_dist, marker "release") + WARM critic (rts38k iter_0000119).
+#
+# Used by .launch_mix3way_64k.sh -> run_sh9_122b_a10b_128gpu.sh
+#   -> run_tmax15k_122b_a10b_scalable_ppo_criticlr30x_strongest_partial_reward.sh
+# with TOPOLOGY=128cp4 + ROLLOUT_NUM_GPUS=56 (64 train: TP2 PP4 CP4 EP16 + 56 infer: 7 x TP8).
+#
+# ====================================================================================
+# FORKED FROM harbor_rts_122b_a10b_sh9_ppo_cp4_bs512_84k_partial_reward.yaml
+# ====================================================================================
+# Deltas (everything else byte-identical -- all PPO hyperparameters, reward shaping,
+# concurrency, Daytona settings and timeouts are unchanged):
+#   1. harbor_tasks_dir -> .mix3way_farm_sh9_seed1166x2 (the mix3way manifest's 26855
+#      entries, REMAPPED from the unmounted gy4 share onto sh9 -- see the DATA section)
+#   2. max_context_tokens 86016 -> 65536, proactive_summarization_threshold 24576 -> 20480
+#   3. trials_dir       -> placeholder; the launcher rewrites it to a ${RUN_TAG}-scoped
+#      path (see TRIAL DIR ISOLATION below)
+#
+# The actor is COLD here (RST base, no value head lineage) while the critic is WARM from a
+# DIFFERENT run's tree. Because the actor's marker is "release", start_rollout_id stays 0
+# and the critic's iter-119 marker cannot drag the schedule with it; the critic is loaded
+# weights-only (placement_group.py:196-224), so its source optimizer/LR state is discarded.
+#
+# ====================================================================================
+# CONTEXT: 64k ceiling on BOTH sides, with a 20k reserve for the compaction pass
+# ====================================================================================
+# CHANGED FROM THE 84k PARENT. The wrapper sets every wall to 65536 (64k): SEQ_LENGTH,
+# HARBOR_MAX_TRAIN_TOTAL_TOKENS, ROLLOUT_MAX_CONTEXT_LEN, SGLANG_CONTEXT_LENGTH,
+# SGLANG_MAX_PREFILL_TOKENS. This yaml supplies the matching AGENT-side numbers:
+#
+#   max_context_tokens = 65536   hard ceiling the agent believes in. Must never EXCEED the
+#                               SGLang wall, or long trajectories are silently truncated
+#                               (it was once 128000 against an 84k server -- exactly that bug).
+#
+#   proactive_summarization_threshold = 20480
+#                               ★ READ THE SEMANTICS CAREFULLY -- this is a FREE-token
+#                               floor, not a used-token trigger. terminus_2.py:965-968:
+#                                   free_tokens = context_limit - current_tokens
+#                                   if free_tokens < threshold: summarize
+#                               So compaction fires once FEWER THAN 20480 tokens remain,
+#                               i.e. at ~45056 (44k) used. The 20k is the headroom the
+#                               summarisation pass itself gets to run in without crossing
+#                               the 64k wall.
+#
+#                               DO NOT set this to 65536 "so it compacts at 64k". That is
+#                               BACKWARDS and pathological: free = 65536 - used is below
+#                               65536 the moment any token exists, so the agent would
+#                               compact on turn one, forever, and the run would train on
+#                               nothing but summaries. This instruction was requested as
+#                               "ceiling 64k, threshold up to 64k, 20k for compaction" --
+#                               the self-consistent reading of that is ceiling 65536 with a
+#                               20480 reserve, which is what is set here.
+#
+# CP=4 is retained from the 84k parent. It is no longer strictly required for memory at 64k
+# (the binding term, fp32 logits on the last pipeline stage with vocab 248320, is local
+# T = 65536/CP -> 11.4 GB at CP4), but it is kept because the WARM CRITIC checkpoint was
+# written at TP2/PP4/CP4/EP16; changing CP would force a reshard on load.
+#
+# ====================================================================================
+# DATA: 37484 Recursive-Task-Synthesis (RTS) tasks, SHUFFLED
+# ====================================================================================
+# harbor_synth_all_20260725/dataset_rts holds 37484 REAL task dirs (each with task.toml,
+# environment/, solution/, tests/). Unlike the strategy15k pool this one is NOT quality-
+# ranked: tasks are named by content hash (rts_task_<hex>), so sorted order is already
+# hash-arbitrary rather than a best-to-worst sweep.
+#
+# >>CTRF PRESENT (this is what makes the dense reward non-trivial): tests/test.sh runs
+#   pytest with --ctrf writing /logs/verifier/ctrf.json, where
+#   partial_reward._load_progress_score reads passed/total from. Measured on this pool:
+#   27/30 sampled tasks emit ctrf (90%). The launcher re-checks a sample and refuses to
+#   start if fewer than half do, since the dense reward would silently degrade to the
+#   binary terminal reward.
+#
+# >>SHUFFLE is still applied (as requested), but NOT via rollout_shuffle -- that flag is
+#   inert for HarborTaskDataSource (see the note above). harbor_tasks_dir instead points
+#   at a rank-prefixed symlink farm; details in the DATA section further down.
+#
+# SCHEDULE: 1 epoch over 37484 @ bs512 = ceil(37484/512) = 74 steps/epoch.
+#
+# ====================================================================================
+# REWARD / CRITIC / TRIAL DIR
+# ====================================================================================
+# Reward: slime_plugins.harbor.partial_reward.test_count_progress_rewards
+#   shaped = passed_tests / HARBOR_TESTCOUNT_SCALE (=20), the ABSOLUTE passed-test count.
+#   Under advantage_estimator=ppo, _should_normalize() is False, so raw shaped rewards
+#   flow straight into critic + GAE with no group normalization. Values CAN exceed 1.0
+#   for tasks with >20 tests (measured up to 2.75); PPO absorbs the scale.
+#
+# Critic: WARM-loaded from the tmax15k 88cp4-84k run's iter_0000069 value head via a
+#   load-root symlink pair (<load> / <load>_critic) -- see the wrapper. Weights-only, so
+#   the source run's 69-step LR schedule cannot clash with this run's. Hence
+#   NUM_CRITIC_ONLY_STEPS=2 (re-calibration only) rather than 5 (cold start).
+#
+# TRIAL DIR ISOLATION: trial dirs are an OUTPUT (training writes verifier/ctrf.json and
+#   the reward reads it back) -- nothing needs pre-populating. But _trial_name()
+#   (harbor/rollout.py) is "slime-r{rollout}-g{group}-s{rank}-i{index}" with NO run tag,
+#   so pointing trials_dir at a previous run would collide name-for-name and a new trial
+#   that fails to emit its own ctrf would silently be scored on ANOTHER model's leftover
+#   ctrf.json. The wrapper rewrites this line to a ${RUN_TAG}-scoped path at launch.
+
+# ====================================================================================
+# NOTE ON rollout_shuffle (kept only for compatibility -- it does NOTHING here)
+# ====================================================================================
+# rollout_shuffle is honoured by slime's own RolloutDataSource (_ensure_epoch permutes the
+# pool per epoch). This run uses HarborTaskDataSource, a SEPARATE class with no shuffle at
+# all, so the flag is inert. The actual shuffling is done by the rank-prefixed symlink
+# farm that harbor_tasks_dir points at -- see the DATA section below.
+#
+# ====================================================================================
+# TRIAL DIR ISOLATION -- why this MUST be a fresh directory
+# ====================================================================================
+# Trial dirs are an OUTPUT of training, not an input: each rollout writes
+#   <trials_dir>/slime-r{rollout}-g{group}-s{rank}-i{index}/verifier/ctrf.json
+# and partial_reward reads that same path back. Nothing needs to be pre-populated.
+#
+# BUT the name is fully deterministic (slime_plugins/harbor/rollout.py::_trial_name) --
+# it contains NO run tag and NO timestamp. If trials_dir pointed at the previous 27B
+# run's directory, this run's slime-r0-g0-s0-i0 would collide with the 27B one. In that
+# old dir only 47/400 sampled trials have a ctrf.json (353 verifier dirs are empty), so
+# whenever a new trial fails to emit its own ctrf (verifier timeout / agent failure --
+# common), _load_progress_score would silently read the 27B MODEL's leftover ctrf and
+# score THIS run against another model's results. No error, no warning.
+# => always a fresh, run-scoped directory. The launcher refuses known-stale paths.
+# The old 27B dir is still useful, but ONLY as a read-only regression fixture.
+
+rollout_shuffle: true
+
+# Training pool: the unpacked Recursive-Task-Synthesis corpus (37484 task.toml dirs) on
+# the shared fs (all nodes read it directly; no node-local /tmp staging).
+# ====================================================================================
+# DATA: dataset_rts (37484 Recursive-Task-Synthesis tasks), consumed in SHUFFLED order
+# ====================================================================================
+# harbor_tasks_dir points at a SYMLINK FARM, not the raw pool. HarborTaskDataSource is a
+# SEPARATE implementation from slime's RolloutDataSource and has NO shuffle: discovery is
+# `sorted(tasks_dir.glob(pattern))` (data_source.py:228) and consumption is a plain cursor
+# `entries[sample_offset % N]` (:57). So `rollout_shuffle: true` above is a silent NO-OP
+# for this data source, and pointing at the raw pool would consume it in sorted order.
+#
+# The farm's entries are named `<zero-padded rank>_<original task name>` over a seeded
+# permutation. Fixed-width prefixes make lexicographic sort == numeric rank, so the data
+# source's own sorted() reproduces the SHUFFLED order -- while harbor_tasks_dir stays a
+# real directory, which the launcher pre-flight requires (it greps this very line and
+# compares it against TASKS_DIR). The harbor_tasks_path branch would shuffle too, but it
+# cannot satisfy that check, and harbor_tasks_dir is consulted FIRST in
+# _load_task_entries, so keeping both would silently discard the shuffle.
+#
+# Rebuild with: python3 /path/to/workspace/.build_rts_shuffled_farm.py
+# (seeded 20260821 -> reproducible, so a resume offset stays meaningful.)
+harbor_tasks_dir: /path/to/workspace/.mix3way_farm_sh9_seed1166x2
+harbor_tasks_glob: "*/task.toml"
+
+# Held-out EVAL pool: the 89 Terminal-Bench 2 tasks (gy4 share, all nodes see it).
+# Unchanged from the parent yaml -- these DO emit ctrf.json (verified in past eval runs).
+harbor_eval_tasks_dir: /path/to/workspace/terminal-bench-2
+harbor_eval_tasks_glob: "*/task.toml"
+
+harbor_trial_defaults:
+  # FRESH, run-scoped. Never reuse the 27B synth_all_38k_ppo_dense_shuffle_* dirs.
+  trials_dir: /path/to/workspace/slime_harbor_trials/PLACEHOLDER_rewritten_at_launch
+  timeout_multiplier: 1.0
+  agent:
+    import_path: slime_plugins.harbor.agent:SlimeTerminus2
+    model_name: slime-policy
+    override_timeout_sec: 3600
+    kwargs:
+      parser_name: json
+      max_turns: 60
+      collect_rollout_details: true
+      enable_summarize: true
+      proactive_summarization_threshold: 20480
+      trajectory_config:
+        raw_content: true
+        linear_history: true
+      record_terminal_session: false
+      llm_backend: slime_sglang
+      llm_kwargs:
+        apply_chat_template_kwargs:
+          enable_thinking: false
+        max_context_tokens: 65536
+  verifier:
+    override_timeout_sec: 900
+  environment:
+    type: daytona
+    delete: true
+    override_storage_mb: 10240
+    kwargs:
+      connection_pool_maxsize: 128
+      auto_stop_interval_mins: 90
+      auto_delete_interval_mins: 10
+
+harbor_sample_mode: trajectory_retokenized
+harbor_group_unit: trajectory
+harbor_reward_key: reward
+
+# n=1: group==task==sandbox. Fly 280 concurrent groups (max_concurrent_groups), accept
+# the first 256 completed (rollout_batch_size in the wrapper), drop the slow tail.
+# num_concurrent_trials is the sandbox-level semaphore; keep >= the in-flight cap.
+harbor_num_concurrent_trials: 560
+harbor_fully_async_max_concurrent_groups: 560
+harbor_partial_group_min_units: 1
+
+# Daytona per-org create limit 600/min (=10/s); pace to 6/s (matches source).
+harbor_create_rate_per_sec: 6.0
+harbor_create_rate_burst: 6.0
+
+harbor_trial_node_spread: true
+harbor_trials_per_node: 70
+harbor_trial_worker_num_cpus: 0.05
+harbor_trial_worker_startup_timeout_sec: 120
+harbor_trial_worker_healthcheck_timeout_sec: 30
+harbor_kill_unhealthy_trial_workers: false
+harbor_fallback_to_inprocess_trials: false
+harbor_trial_remote_timeout_sec: 5400
+
+harbor_eval_total_timeout_sec: 10800
+rollout_cleanup_function_path: slime_plugins.harbor.fully_async_rollout.cleanup_rollout
+harbor_fully_async_shutdown_drain_timeout_sec: 30
+harbor_fully_async_shutdown_join_timeout_sec: 45
+
+harbor_fail_on_conversion_error: true
+harbor_fail_on_trial_error: false
+harbor_require_full_rollout_groups: false
+harbor_rollout_group_attempt_multiplier: 12
+harbor_retry_missing_samples: 0

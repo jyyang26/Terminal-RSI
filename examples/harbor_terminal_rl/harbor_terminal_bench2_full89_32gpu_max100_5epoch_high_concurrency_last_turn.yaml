@@ -1,0 +1,51 @@
+# Full terminal-bench-2 Harbor rollout config for the 32-GPU Qwen3.5-9B
+# high-concurrency run: max_turns=100, response_len=4096, 5 epochs.
+# Replacement 32-H20 retry uses 3 rollout nodes * 128 Apptainer trials/node.
+
+harbor_tasks_dir: /path/to/workspace/code/terminal-bench-2-main
+harbor_tasks_glob: "*/task.toml"
+harbor_tasks_offset: 0
+
+harbor_trial_defaults:
+  trials_dir: /path/to/workspace/slime_harbor_trials/tb2_full89_32gpu_max100_5epoch_resp4096_ctx128k_rb16_os32_conc384_pn128
+  timeout_multiplier: 1.0
+  agent:
+    import_path: slime_plugins.harbor.agent:SlimeTerminus2
+    model_name: slime-policy
+    kwargs:
+      parser_name: json
+      max_turns: 100
+      collect_rollout_details: true
+      enable_summarize: false
+      record_terminal_session: false
+      llm_backend: slime_sglang
+      llm_kwargs:
+        apply_chat_template_kwargs:
+          enable_thinking: false
+  environment:
+    import_path: slime_plugins.harbor.singularity_env:SlimeSingularityEnvironment
+    kwargs:
+      singularity_image_cache_dir: /path/to/workspace/harbor_sif_cache_tb2_full_harbor_runtime
+      singularity_no_mount: home,tmp,bind-paths,proc
+      singularity_bind_host_proc: true
+      singularity_registry_proxy: http://star-proxy.oa.com:3128
+      singularity_registry_mirror: docker.1panel.live
+
+harbor_sample_mode: last_turn
+harbor_reward_key: reward
+
+# Three rollout nodes. Each TrialWorker actor can host up to 128 concurrent
+# Apptainer-backed trials; the global semaphore caps total active trials.
+harbor_num_concurrent_trials: 384
+harbor_trial_node_spread: true
+harbor_trials_per_node: 128
+harbor_trial_worker_num_cpus: 0.05
+harbor_trial_worker_startup_timeout_sec: 30
+harbor_trial_worker_healthcheck_timeout_sec: 5
+harbor_trial_remote_timeout_sec: 21600
+
+harbor_fail_on_conversion_error: true
+harbor_fail_on_trial_error: false
+harbor_require_full_rollout_groups: true
+harbor_rollout_group_attempt_multiplier: 8
+harbor_retry_missing_samples: 0

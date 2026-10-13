@@ -1,0 +1,82 @@
+table,category,hyperparameter,paper_sao_arxiv_2607_07508v1,ours_88cp4_84k,match,notes
+shared,model,backbone,Qwen3-30B-A3B-Thinking-2507,Qwen3.5-122B-A10B,no,
+shared,model,policy_init,"coding: base directly; math: SFT 3 epochs on TIR data from GPT-OSS-120B","HF base directly, no SFT",no,
+shared,model,value_init,"scaled value pretraining (6k samples, full-parameter)","cold start; value head auto-reinitialized on shape mismatch (model.py:_reinitialize_critic_output_layer)",no,KEY DIVERGENCE
+shared,model,thinking_mode,"Thinking model, CoT enabled",enable_thinking: false,no,
+shared,algorithm,objective,PPO/VAPO family (with critic) + DIS,--advantage-estimator ppo,yes,
+shared,sampling,group_size_n,1 (single rollout),n_samples_per_prompt=1,yes,
+shared,sampling,batch_size,128,rollout_batch_size=256 / global_batch_size=256,no,2x larger
+shared,sampling,max_length,128k,"train wall 84k (seq_length=86016); per-turn response cap 8192",no,
+shared,sampling,rollout_temperature,1.0,1.0,yes,
+shared,sampling,rollout_top_p,1.0,1.0,yes,
+shared,sampling,rollout_top_k,not reported,-1,approx,
+shared,optimization,actor_lr,1e-6,1e-6,yes,"yaml role override; top-level --lr 5e-7 is replaced for actor"
+shared,optimization,critic_lr,5e-6,1.5e-5,no,3x higher (30x canonical 5e-7)
+shared,optimization,lr_schedule,critic has 10-step warmup,"--lr-decay-style constant, min_lr == lr, no warmup",no,
+shared,optimization,gamma_gae,not reported (implied 1.0),1.0 (slime default),approx,
+shared,optimization,lambda_policy,"1 - 1/(alpha*L), alpha=1.5","same (length_adaptive_gae, GAE_ALPHA default 1.5)",yes,
+shared,optimization,lambda_critic,1.0,1.0,yes,
+shared,clipping,eps_low,0.8 (coding) / 0.3 (math),0.2,no,
+shared,clipping,eps_high,3.0 (coding) / 5.0 (math),0.2 (eps_clip_high unset -> falls back to eps_clip),no,SEVERE
+shared,clipping,clip_semantics,"double-sided mask: tokens outside [1-eps_l, 1+eps_h] get zero gradient","standard PPO max(-r*A, -clip(r)*A); out-of-range tokens still contribute gradient",no,KEY DIVERGENCE
+shared,clipping,is_denominator_behavior_policy,pi_rollout (DIS: rollout logprobs used directly),"pi_theta_old (recomputed train-side; keep_old_actor=1, use_rollout_logprobs=0)",no,KEY DIVERGENCE
+shared,critic,updates_per_policy_step_K,2,1 (no K>1 mechanism in slime),no,KEY DIVERGENCE
+shared,critic,trainable_params,Frozen-Attention (only MoE projections trained),full-parameter (freeze_params_name_list unset),no,KEY DIVERGENCE
+shared,critic,warmup_mechanism,critic lr warmup over 10 steps,--num-critic-only-steps 2 (first 2 rollout steps train critic only; actor frozen),no,different mechanism
+shared,critic,value_clip,not reported,0.2 (slime default),approx,
+shared,advantage,observation_token_handling,"Skip-Observation GAE: Bellman target bypasses environment feedback tokens","NOT IMPLEMENTED; observations only get loss_mask=0, GAE still recurses over the whole response span",no,KEY DIVERGENCE
+shared,advantage,granularity,token-level (ablation shows it beats step-level),token-level,yes,
+shared,advantage,whitening,not reported,normalize_advantages = False (flag not passed),approx,
+shared,regularization,kl,not used,"use_kl_loss=0, kl_coef=0, kl_loss_coef=0",yes,
+shared,regularization,entropy_coef,not reported,0.0 (routed through policy_loss_no_entropy_when_disabled),approx,
+shared,regularization,weight_decay,not reported,0.1,approx,
+shared,regularization,adam_betas,not reported,"(0.9, 0.98)",approx,
+shared,regularization,clip_grad,not reported,1.0,approx,
+shared,async,async_topology,"fully async single-trajectory stream: a trajectory enters training the moment it completes","train_async.py one-step-off: full batch of 256 collected, then train; rollout overlaps training by one step (HARBOR_ROLLOUT_MODE=standard)",no,KEY DIVERGENCE
+shared,agent,scaffold,OpenHands,Terminus2 (SlimeTerminus2),no,
+shared,agent,max_turns,300,60,no,5x fewer
+shared,agent,context_budget,128k,max_context_tokens: 128000 (but train wall is 84k),approx,
+shared,training_volume,training_steps,~1000 steps (claims stable training for 1k steps),num_rollout=100,no,10x fewer
+shared,evaluation,eval_sampling,"top_p 1.0, temp 1.0, max gen 128k","top_p 0.95, top_k 20, temp 1.0",no,
+shared,evaluation,eval_repeats,16 runs (AIME/HMMT/IMO) / 4 runs (BeyondAIME),pass@3 (n_samples_per_eval_prompt=3) on TB2 89 tasks,no,
+ours_extra,parallelism,TP x PP x CP x EP,,2 x 4 x 4 x 16 => DP=2,,memory topology for the 122B GDN hybrid model; paper gives algorithm only
+ours_extra,parallelism,train_infer_gpu_split,,64 train (8 nodes) + 24 infer (3 x TP8),,
+ours_extra,parallelism,FLA_INTRACARD_CP,,0,,fla 0.4.2 switches forward algorithm at >=24576 tokens which desyncs train/rollout logprobs
+ours_extra,parallelism,sequence_parallel,,on,,
+ours_extra,parallelism,qkv_format,,thd,,
+ours_extra,memory,recompute,,--recompute-granularity full --recompute-method uniform --recompute-num-layers 1,,
+ours_extra,memory,optimizer_cpu_offload,,--optimizer-cpu-offload --overlap-cpu-optimizer-d2h-h2d,,PPO forces offload_train=True (actor+critic colocated on same GPUs)
+ours_extra,memory,precision_aware_optimizer,,--use-precision-aware-optimizer,,
+ours_extra,memory,PYTORCH_CUDA_ALLOC_CONF,,max_split_size_mb:256,,expandable_segments is incompatible with torch_memory_saver
+ours_extra,memory,sglang_mem_fraction_static,,0.6 (not the 0.75 default),,at 0.75 the GDN long-sequence temporaries OOM
+ours_extra,batching,use_dynamic_batch_size,,on,,dynamic packing of variable-length trajectories
+ours_extra,batching,max_tokens_per_gpu,,8192,,
+ours_extra,batching,use_dynamic_global_batch_size,,on,,
+ours_extra,batching,data_pad_size_multiplier,,2048 (default 128),,collapses distinct padded shapes to suppress the Triton/GDN JIT cold-compile storm
+ours_extra,batching,micro_batch_size,,1,,bs256/DP2 => 128 grad-accum micro-batches per rank
+ours_extra,batching,balance_data,,on,,Karmarkar-Karp length balancing
+ours_extra,batching,log_probs_chunk_size,,32,,
+ours_extra,moe,moe_token_dispatcher_type,,alltoall (DeepEP off),,
+ours_extra,moe,use_rollout_routing_replay,,on (implies use_routing_replay=True),,train side replays rollout expert routing to kill MoE train/infer mismatch; not in paper
+ours_extra,sampling,over_sampling_batch_size,,"280 (skim-oversample: keep first 256 completed, drop the slow tail)",,paper solves the long tail natively via full asynchrony
+ours_extra,sampling,rollout_max_response_len,,8192,,per-turn cap
+ours_extra,data,harbor_sample_mode,,trajectory_retokenized,,token-correct whole-trajectory masking with prefix-drift normalization
+ours_extra,data,harbor_group_unit,,trajectory,,
+ours_extra,data,token_cap_postprocess,,cap_total_tokens_allow_response_trim_in_samples / _in_rollout_data,,trims response instead of dropping the sample when the 84k wall is hit
+ours_extra,data,HARBOR_LENGTH_REWARD_LAMBDA,,0.0 (length-shaped reward off),,
+ours_extra,data,context_summarization,,"enable_summarize: true, proactive_summarization_threshold: 20000",,Terminus2 context compaction
+ours_extra,loss,calculate_per_token_loss,,off (= per-sample mean normalization),,paper does not state its normalization
+ours_extra,loss,custom_loss,,--loss-type custom_loss + policy_loss_no_entropy_when_disabled,,skips the entropy graph when entropy_coef == 0
+ours_extra,stability,use_fault_tolerance,,on; health check interval/timeout/first-wait = 30/120/600 s,,auto-restarts a dead SGLang engine
+ours_extra,stability,distributed_timeout_minutes,,180,,
+ours_extra,stability,nccl_group_timeouts,,SLIME_NCCL_GROUP_TIMEOUT_MINUTES=120 / SLIME_NEW_GROUP_TIMEOUT_MINUTES=120 / SLIME_GLOO_GROUP_TIMEOUT_MINUTES=60,,JIT cold-compile window exceeds the default NCCL watchdog and would false-kill the run
+ours_extra,stability,TRITON_CACHE_DIR,,/root/.triton_cache_122b_cp4 (node-local persistent),,
+ours_extra,stability,nccl_flight_recorder,,TORCH_NCCL_TRACE_BUFFER_SIZE=2000 + TORCH_NCCL_DUMP_ON_TIMEOUT=1,,
+ours_extra,schedule,save_interval,,10,,
+ours_extra,schedule,eval_interval,,10,,
+ours_extra,schedule,skip_eval_before_train,,on,,
+ours_extra,environment,harbor_num_concurrent_trials,,280,,Daytona sandbox concurrency budget; no such layer in the paper
+ours_extra,environment,harbor_create_rate_per_sec,,6.0 (Daytona org limit is 600/min),,
+ours_extra,environment,harbor_trial_remote_timeout_sec,,5400 (90 min per-trial wall),,
+ours_extra,environment,harbor_eval_total_timeout_sec,,10800 (3 h for the full 89-task sweep),,
+ours_extra,environment,override_storage_mb,,10240,,

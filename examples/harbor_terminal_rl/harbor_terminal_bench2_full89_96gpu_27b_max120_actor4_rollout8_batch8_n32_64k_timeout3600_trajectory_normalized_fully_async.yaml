@@ -1,0 +1,101 @@
+# Full terminal-bench-2 Harbor rollout config for the 96-H20 Qwen3.5-27B
+# fully-async trajectory_retokenized run.
+#
+# Layout expected by the launcher (12 nodes x 8 GPU = 96 GPU):
+# - 4 actor nodes / 32 actor GPUs, TP2 x PP8 x CP2 = 32
+# - 8 rollout nodes / 64 rollout GPUs, 32 x TP2 SGLang engines
+# - 8 task groups per train update (rollout_batch_size = 8)
+# - 32 trajectories per task group (n_samples_per_prompt = 32)
+# - 256 in-flight trials = 8 rollout nodes x 32 trials/node
+# - agent max_turns = 120, 3600s Terminus2 agent execution timeout
+# - context unified at 64k across rollout / SGLang / actor train
+#
+# trajectory_retokenized: superset of trajectory_normalized. One Terminus2 trial
+# maps to one or more trajectory chunks sharing a trajectory group_id. Each turn
+# transition is aligned via strict_prefix -> normalized_prefix (<=16 token edge
+# drift) -> retokenized_prefix (rebuild the bridge from completion_text /
+# assistant message history + span) before falling back to a chunk split. The
+# extra retokenized fallback keeps trajectories whole more often. If the agent
+# does not emit the retokenized fields, it silently degrades to normalized
+# behavior (no downside). Strict `trajectory` mode is intentionally NOT used
+# because real Terminus2 prompt histories are not strict token-prefix extensions.
+
+harbor_tasks_dir: /path/to/workspace/code/terminal-bench-2-main
+harbor_tasks_glob: "*/task.toml"
+harbor_tasks_offset: 0
+
+harbor_trial_defaults:
+  trials_dir: /path/to/workspace/slime_harbor_trials/tb2_full89_96gpu_27b_max120_actor4_rollout8_batch8_n32_resp4096_ctx64k_traincap64k_timeout3600_trajectory_retokenized_fully_async
+  timeout_multiplier: 1.0
+  agent:
+    import_path: slime_plugins.harbor.agent:SlimeTerminus2
+    model_name: slime-policy
+    override_timeout_sec: 3600
+    kwargs:
+      parser_name: json
+      max_turns: 120
+      collect_rollout_details: true
+      # Retrain v2 (PERF_DEBUG.md Case 4): summary ON to fix the 84% context-exceeded
+      # failure mode. Terminus2 LLM-summarizes via the SAME slime-policy (self._llm,
+      # llm_backend: slime_sglang) when free tokens drop below the threshold; the
+      # retokenized stitcher splits a new chunk at the summary reset (atif_adapter.py
+      # finalize_chunk), so loss masking stays correct.
+      enable_summarize: true
+      trajectory_config:
+        raw_content: true
+        linear_history: true
+      record_terminal_session: false
+      llm_backend: slime_sglang
+      llm_kwargs:
+        apply_chat_template_kwargs:
+          enable_thinking: false
+  environment:
+    import_path: slime_plugins.harbor.singularity_env:SlimeSingularityEnvironment
+    kwargs:
+      singularity_image_cache_dir: /path/to/workspace/harbor_sif_cache_tb2_full_harbor_runtime
+      singularity_fakeroot: false
+      singularity_drop_caps: CAP_PERFMON,CAP_BPF,CAP_CHECKPOINT_RESTORE
+      # Per-container RAM cap + watchdog. ENABLED (watchdog=false) after run96retok
+      # died: a runaway `make -j` inside one trial's container grew to 1861GB and
+      # starved node .141 (515 host-RAM OOMs over 6h -> couldn't assemble 8 full
+      # rollout groups -> RuntimeError). With a 50GB cap the watchdog kills only
+      # that one container at 95% of the limit, isolating the blast radius instead
+      # of taking down every trial on the node. 50GB x 32 trials/node = 1600GB,
+      # leaving headroom under the 2000GB node RAM for SGLang + system.
+      singularity_disable_memory_watchdog: false
+      singularity_memory_limit_mb: 51200
+      singularity_no_mount: home,tmp,bind-paths,proc
+      singularity_bind_host_proc: true
+      singularity_registry_proxy: http://star-proxy.oa.com:3128
+      singularity_registry_mirror: docker.1panel.live
+
+harbor_sample_mode: trajectory_retokenized
+harbor_group_unit: trajectory
+harbor_reward_key: reward
+
+# Fully-async window: 8 active task groups * 32 samples/group = 256 active
+# trajectories. trials_per_node 32 * 8 rollout nodes = 256 = num_concurrent_trials.
+# NOTE: 27B previously lost Ray heartbeats at 48 trials/node (conc=192); 24/node
+# (conc=96) was stable. 32/node here is between the two, deliberately matching the
+# proven 9B fully-async value (which ran 32/node stably). Stability switches below
+# stay on; if Ray nodes get marked dead, drop to harbor_trials_per_node=24 /
+# harbor_num_concurrent_trials=192 first.
+harbor_num_concurrent_trials: 256
+harbor_fully_async_max_concurrent_groups: 8
+harbor_trial_node_spread: true
+harbor_trials_per_node: 32
+harbor_trial_worker_num_cpus: 0.05
+harbor_trial_worker_startup_timeout_sec: 60
+harbor_trial_worker_healthcheck_timeout_sec: 30
+harbor_kill_unhealthy_trial_workers: false
+harbor_fallback_to_inprocess_trials: false
+harbor_trial_remote_timeout_sec: 21600
+rollout_cleanup_function_path: slime_plugins.harbor.fully_async_rollout.cleanup_rollout
+harbor_fully_async_shutdown_drain_timeout_sec: 30
+harbor_fully_async_shutdown_join_timeout_sec: 45
+
+harbor_fail_on_conversion_error: true
+harbor_fail_on_trial_error: false
+harbor_require_full_rollout_groups: true
+harbor_rollout_group_attempt_multiplier: 8
+harbor_retry_missing_samples: 0

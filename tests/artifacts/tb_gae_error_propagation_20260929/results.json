@@ -1,0 +1,47 @@
+{
+  "date": "2026-09-29",
+  "passed": 103,
+  "failed": 0,
+  "skipped": 0,
+  "wall_seconds": 5.16,
+  "suites": {
+    "tests.test_tb_gae_error_propagation": {
+      "tests": 14,
+      "seconds": 0.331
+    },
+    "tests.test_tb_gae_termination_smoke": {
+      "tests": 36,
+      "seconds": 0.28
+    },
+    "tests.test_harbor_atif_adapter": {
+      "tests": 18,
+      "seconds": 0.002
+    },
+    "tests.test_harbor_sample_postprocess": {
+      "tests": 2,
+      "seconds": 0.0
+    },
+    "tests.test_harbor_rollout_async": {
+      "tests": 22,
+      "seconds": 0.33
+    },
+    "tests.test_harbor_eval_count_metrics.TestEvalCountMetrics": {
+      "tests": 8,
+      "seconds": 0.0
+    },
+    "tests.test_harbor_eval_count_metrics.TestEvalTrajectoryDedup": {
+      "tests": 1,
+      "seconds": 0.0
+    },
+    "tests.test_harbor_eval_count_metrics": {
+      "tests": 2,
+      "seconds": 0.0
+    }
+  },
+  "source_sha256": {
+    "slime_plugins/harbor/rollout.py": "1ef2944edcf33f62d3798a88e5da3f2b41efba335853f953e254bfdde4ab9165",
+    "tests/test_tb_gae_error_propagation.py": "105d9032365d2e5029bcbd225984da962795d041dc3fd96df49ab3a6a2d2ab17"
+  },
+  "scope": "Exception propagation only; no truncation bootstrap or online training",
+  "protected_shell_yaml_files_unchanged": 311
+}

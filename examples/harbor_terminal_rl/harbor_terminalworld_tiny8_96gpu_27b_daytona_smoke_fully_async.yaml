@@ -1,0 +1,82 @@
+# TINY validation smoke: TerminalWorld self-contained-Dockerfile tasks on Daytona.
+#
+# PURPOSE: prove that (a) Daytona builds a sandbox from a per-task Dockerfile via
+# Image.from_dockerfile (daytona.py:287-308, fires when task.toml has NO
+# docker_image), and (b) reward is NOT stuck at 0 — i.e. the verifier
+# (tests/test.sh -> /logs/verifier/reward.txt) actually scores. This is the
+# self-contained dataset that fixes the valid359 failure mode (valid359 relied on
+# a runtime setup.sh injection that Daytona's _DaytonaDirect path never ran, so
+# /app was empty and checker.sh was missing -> reward=0 everywhere).
+#
+# TerminalWorld tasks each carry: environment/Dockerfile (FROM ubuntu + apt + COPY
+# + ENTRYPOINT), tests/test.sh (verifier, self-installs deps via uv), tests/
+# test_state.py, solution/solve.sh (reference). harbor mounts tests/ -> /tests and
+# uploads environment/ as the Docker build context. NO docker_image field => build
+# path. allow_internet=true (the verifier curls astral.sh + apt-get at score time).
+#
+# Layout reuses the proven 96-GPU 27B fully-async shape; only data + concurrency
+# differ. Keep concurrency SMALL here because each task image is built fresh on
+# first use and per-task build cost is unknown — this run measures it.
+
+harbor_tasks_dir: /path/to/workspace/code/terminalworld_tiny8
+harbor_tasks_glob: "*/task.toml"
+harbor_tasks_offset: 0
+
+harbor_trial_defaults:
+  trials_dir: /path/to/workspace/slime_harbor_trials/terminalworld_tiny8_daytona_smoke
+  timeout_multiplier: 1.0
+  agent:
+    import_path: slime_plugins.harbor.agent:SlimeTerminus2
+    model_name: slime-policy
+    override_timeout_sec: 1800
+    kwargs:
+      parser_name: json
+      max_turns: 60
+      collect_rollout_details: true
+      enable_summarize: true
+      # Same context-wall fix proven in the valid359 run.
+      proactive_summarization_threshold: 20000
+      trajectory_config:
+        raw_content: true
+        linear_history: true
+      record_terminal_session: false
+      llm_backend: slime_sglang
+      llm_kwargs:
+        apply_chat_template_kwargs:
+          enable_thinking: false
+        max_context_tokens: 64000
+  environment:
+    type: daytona
+    delete: true
+    override_storage_mb: 10240
+    kwargs:
+      connection_pool_maxsize: 64
+
+harbor_sample_mode: trajectory_retokenized
+harbor_group_unit: trajectory
+harbor_reward_key: reward
+
+# Tiny + conservative: 8 tasks, build-from-Dockerfile is unproven for throughput,
+# so cap concurrency low. n=8 samples/group, accept first 6, 2 groups in flight =>
+# 16 concurrent sandboxes (16 * 10GiB = 160GiB, trivially under tier4 5000GiB).
+harbor_num_concurrent_trials: 16
+harbor_fully_async_max_concurrent_groups: 2
+harbor_partial_group_min_units: 6
+
+harbor_trial_node_spread: true
+harbor_trials_per_node: 4
+harbor_trial_worker_num_cpus: 0.05
+harbor_trial_worker_startup_timeout_sec: 120
+harbor_trial_worker_healthcheck_timeout_sec: 30
+harbor_kill_unhealthy_trial_workers: false
+harbor_fallback_to_inprocess_trials: false
+harbor_trial_remote_timeout_sec: 21600
+rollout_cleanup_function_path: slime_plugins.harbor.fully_async_rollout.cleanup_rollout
+harbor_fully_async_shutdown_drain_timeout_sec: 30
+harbor_fully_async_shutdown_join_timeout_sec: 45
+
+harbor_fail_on_conversion_error: true
+harbor_fail_on_trial_error: false
+harbor_require_full_rollout_groups: true
+harbor_rollout_group_attempt_multiplier: 8
+harbor_retry_missing_samples: 0

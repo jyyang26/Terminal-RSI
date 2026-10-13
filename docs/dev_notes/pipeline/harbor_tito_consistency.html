@@ -1,0 +1,751 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Harbor Agentic RL 的 TITO 一致性 · Tool Call / 历史删除 / 原始 token 回放</title>
+<style>
+:root{
+  --bg:#0b0f16; --panel:#141a24; --panel2:#1b2330; --panel3:#232d3d; --border:#2c3746;
+  --txt:#e6edf3; --dim:#8b98a9; --dim2:#6b7688;
+  --launch:#e3b341;
+  --ray:#f778ba;
+  --rollout:#3fb950;
+  --sandbox:#56d4dd;
+  --buffer:#d29922;
+  --critic:#a371f7;
+  --actor:#58a6ff;
+  --sync:#ff7b72;
+  --accent:#79c0ff;
+  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth}
+body{background:var(--bg);color:var(--txt);
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+  line-height:1.65;font-size:14.5px;padding-bottom:80px}
+header{padding:26px 34px 20px;border-bottom:1px solid var(--border);
+  background:radial-gradient(1200px 300px at 20% -50%,rgba(88,166,255,.18),transparent),linear-gradient(180deg,#151c27,#0b0f16)}
+h1{font-size:25px;font-weight:750;letter-spacing:.2px}
+h1 .tag{font-size:13px;color:var(--dim);font-weight:400;margin-left:12px;font-family:var(--mono)}
+.sub{color:var(--dim);font-size:13.5px;margin-top:8px;max-width:1150px}
+.kv{display:flex;flex-wrap:wrap;gap:8px;margin-top:16px}
+.kv code{background:var(--panel2);border:1px solid var(--border);border-radius:6px;padding:3px 9px;
+  font-family:var(--mono);font-size:11.5px;color:var(--accent)}
+nav{position:sticky;top:0;z-index:50;background:rgba(11,15,22,.94);backdrop-filter:blur(10px);
+  border-bottom:1px solid var(--border);padding:10px 34px;display:flex;gap:6px;flex-wrap:wrap;font-size:12.5px}
+nav a{color:var(--dim);text-decoration:none;padding:4px 11px;border-radius:20px;border:1px solid transparent;white-space:nowrap}
+nav a:hover{color:var(--txt);border-color:var(--border);background:var(--panel)}
+main{max-width:1400px;margin:0 auto;padding:0 34px}
+section{padding:38px 0 10px;border-bottom:1px solid var(--border)}
+section:last-child{border-bottom:none}
+h2{font-size:20px;font-weight:700;display:flex;align-items:center;gap:11px;margin-bottom:6px}
+h2 .num{font-family:var(--mono);font-size:12px;color:#0b0f16;background:var(--accent);
+  border-radius:6px;padding:2px 8px;font-weight:700}
+h3{font-size:15.5px;font-weight:650;margin:26px 0 10px;color:var(--txt);display:flex;align-items:center;gap:8px}
+h3::before{content:"";width:4px;height:15px;background:var(--accent);border-radius:2px;display:inline-block}
+p{margin:9px 0;color:#c8d3e0}
+.lead{color:var(--dim);font-size:13.5px;margin-bottom:18px;max-width:1150px}
+code{font-family:var(--mono);font-size:12.5px;background:var(--panel2);padding:1.5px 5px;border-radius:4px;color:#9fd0ff}
+b{color:#fff;font-weight:650}
+em{color:var(--accent);font-style:normal}
+.card{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:16px 18px;margin:12px 0}
+.card.tight{padding:13px 15px}
+.grid{display:grid;gap:12px}
+.g2{grid-template-columns:repeat(2,1fr)}
+.g3{grid-template-columns:repeat(3,1fr)}
+@media(max-width:1080px){.g2,.g3{grid-template-columns:1fr}}
+.note{border-left:3px solid var(--buffer);background:rgba(210,153,34,.07);border-radius:0 10px 10px 0;
+  padding:12px 16px;margin:14px 0;font-size:13px;color:#e8d9b0}
+.warn{border-left:3px solid var(--sync);background:rgba(255,123,114,.07);border-radius:0 10px 10px 0;
+  padding:12px 16px;margin:14px 0;font-size:13px;color:#ffc9c4}
+.ok{border-left:3px solid var(--rollout);background:rgba(63,185,80,.07);border-radius:0 10px 10px 0;
+  padding:12px 16px;margin:14px 0;font-size:13px;color:#b7f0c2}
+.note b,.warn b,.ok b{color:#fff}
+table{width:100%;border-collapse:collapse;margin:12px 0;font-size:12.5px}
+th,td{text-align:left;padding:8px 11px;border-bottom:1px solid var(--border);vertical-align:top}
+th{color:var(--dim);font-weight:600;font-size:11.5px;text-transform:uppercase;letter-spacing:.5px;
+  background:var(--panel2);position:sticky;top:44px}
+tr:hover td{background:rgba(88,166,255,.045)}
+td.m,th.m{font-family:var(--mono);font-size:11.5px}
+td.m{color:#9fd0ff}
+.tblwrap{overflow-x:auto;border:1px solid var(--border);border-radius:10px;margin:14px 0}
+.tblwrap table{margin:0}
+.tblwrap th:first-child,.tblwrap td:first-child{padding-left:14px}
+.flow{display:flex;flex-direction:column;gap:0;margin:16px 0}
+.fnode{border:1.5px solid var(--border);border-left:5px solid var(--c,var(--border));border-radius:10px;
+  background:var(--panel);padding:13px 16px;position:relative;transition:.16s}
+.fnode:hover{border-color:var(--accent);transform:translateX(3px)}
+.fnode .fh{display:flex;align-items:center;gap:10px;font-weight:680;font-size:14.5px}
+.fnode .fh .badge{margin-left:auto;font-size:10px;font-weight:700;padding:2px 9px;border-radius:20px;
+  background:var(--c,var(--border));color:#0b0f16;white-space:nowrap}
+.fnode .fd{color:var(--dim);font-size:12.5px;margin-top:6px}
+.fnode .fp{font-family:var(--mono);font-size:11px;color:var(--accent);margin-top:6px;word-break:break-all}
+.fnode ul{margin:8px 0 0 18px;color:#c8d3e0;font-size:12.5px}
+.fnode li{margin:3px 0}
+.farrow{display:flex;align-items:center;justify-content:center;gap:8px;height:36px;position:relative;color:var(--dim2)}
+.farrow::before{content:"";position:absolute;top:0;bottom:0;left:50%;width:2px;background:var(--border)}
+.farrow span{position:relative;z-index:2;background:var(--bg);border:1px solid var(--border);border-radius:20px;
+  padding:2px 11px;font-family:var(--mono);font-size:10.5px;color:var(--accent)}
+.hbox{border:1px dashed var(--c,var(--border));border-radius:12px;padding:14px;margin:14px 0;
+  background:rgba(255,255,255,.015)}
+.hbox>.hl{font-size:11.5px;font-weight:700;color:var(--c,var(--dim));letter-spacing:.6px;
+  text-transform:uppercase;margin-bottom:11px;font-family:var(--mono)}
+.chips{display:flex;flex-wrap:wrap;gap:7px;margin-top:9px}
+.chip{font-family:var(--mono);font-size:10.5px;padding:3px 9px;border-radius:6px;
+  border:1px solid var(--border);background:var(--panel2);color:var(--dim)}
+.chip.hi{color:#0b0f16;background:var(--accent);border-color:var(--accent);font-weight:700}
+.chip.g{color:#0b0f16;background:var(--rollout);border-color:var(--rollout);font-weight:700}
+.chip.r{color:#0b0f16;background:var(--sync);border-color:var(--sync);font-weight:700}
+pre{background:#0a0e14;border:1px solid var(--border);border-radius:10px;padding:14px 16px;overflow-x:auto;
+  font-family:var(--mono);font-size:11.8px;line-height:1.62;color:#c9d6e4;margin:12px 0}
+pre .c{color:#5c6a7d}
+pre .k{color:#ff7b72}
+pre .s{color:#a5d6ff}
+pre .f{color:#d2a8ff}
+pre .n{color:#79c0ff}
+.legend{display:flex;gap:15px;flex-wrap:wrap;margin-top:15px;font-size:11.5px;color:var(--dim)}
+.legend span{display:inline-flex;align-items:center;gap:6px}
+.dot{width:11px;height:11px;border-radius:3px;display:inline-block}
+footer{max-width:1400px;margin:0 auto;padding:30px 34px;color:var(--dim2);font-size:12px}
+.verdict{display:grid;grid-template-columns:auto 1fr;gap:10px 14px;align-items:start;margin:14px 0}
+.vbadge{font-family:var(--mono);font-size:10.5px;font-weight:700;padding:3px 10px;border-radius:20px;white-space:nowrap;margin-top:2px}
+.vb-ok{background:var(--rollout);color:#0b0f16}
+.vb-warn{background:var(--buffer);color:#0b0f16}
+.vb-bad{background:var(--sync);color:#0b0f16}
+.vb-inf{background:var(--dim2);color:#0b0f16}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Harbor Agentic RL 的 TITO 一致性<span class="tag">slime_plugins/harbor · trajectory_retokenized</span></h1>
+  <p class="sub">
+    针对「Tool Call 解析 + <code>apply_chat_template</code> 重渲染破坏 Token-In-Token-Out 一致性」这一类通用问题，
+    在<b>本仓库这条具体链路</b>上逐行核对的结果。结论先说：<b>通用文档里最担心的那两个坑，这里其实躲开了</b> ——
+    动作 token 全程是 SGLang 采样出的原始 id，也不存在「结构化 tool_calls 再渲染回文本」这一步。
+    但 <b>Terminus2 会删改历史</b>，这才是真正需要理解的地方 —— 它不会污染 loss，代价出在
+    <em>credit assignment 被切碎</em> 上。
+  </p>
+  <div class="kv">
+    <code>harbor_sample_mode=trajectory_retokenized</code><code>parser_name: json</code><code>max_turns: 60</code>
+    <code>enable_summarize: true</code><code>advantage_estimator=ppo</code><code>SEQ_LENGTH=86016</code>
+    <code>max_context_tokens=86016</code><code>compaction @ 65536</code>
+  </div>
+  <p class="sub" style="margin-top:14px;border-left:3px solid var(--rollout);padding-left:12px">
+    <b>2026-08-18 更新</b>：脚本已切到 <code>TOPOLOGY=128cp4</code> / bs512 / <b>两侧统一 84k</b>
+    （<code>SEQ_LENGTH = HARBOR_MAX_TRAIN_TOTAL_TOKENS = ROLLOUT_MAX_CONTEXT_LEN =
+    SGLANG_CONTEXT_LENGTH = max_context_tokens = 86016</code>，压缩阈值 65536）。
+    <b>本文原 §4.2 描述的「128k rollout vs 64k 训练截断」已被这次改动修掉</b> ——
+    该节现已改写为「为什么它不再触发」+ 残余的监控点。§1/§2/§3 的结论不受影响。
+  </p>
+  <div class="legend">
+    <span><i class="dot" style="background:var(--rollout)"></i>已验证安全</span>
+    <span><i class="dot" style="background:var(--buffer)"></i>有残余风险 / 需监控</span>
+    <span><i class="dot" style="background:var(--sync)"></i>真实问题</span>
+    <span><i class="dot" style="background:var(--dim2)"></i>推断（本机无 harbor 源码）</span>
+  </div>
+</header>
+
+<nav>
+  <a href="#s0">0 · 结论速览</a>
+  <a href="#s1">1 · 原始 token 回放</a>
+  <a href="#s2">2 · 没有 tool_call 重渲染</a>
+  <a href="#s3">3 · 历史被删除时会怎样</a>
+  <a href="#s4">4 · 残余风险</a>
+  <a href="#s5">5 · 怎么办</a>
+  <a href="#s6">6 · 源码索引</a>
+</nav>
+
+<main>
+
+<section id="s0">
+<h2><span class="num">0</span>结论速览</h2>
+<p class="lead">
+  通用文档把 TITO 失效归因为「decode → 结构化解析 → 模板渲染 → re-encode 往返」。
+  在本仓库里，这条往返<b>不存在</b>。真正的偏差来自另外两个机制，且性质完全不同。
+</p>
+
+<div class="verdict">
+  <span class="vbadge vb-ok">安全</span>
+  <div><b>动作 token 从未被 decode-reencode。</b>
+    <code>llm.py:151</code> 直接从 SGLang <code>meta_info.output_token_logprobs</code> 取
+    <code>completion_token_ids</code>，即模型实际采样出的 id；<code>atif_adapter.py:864-865</code>
+    把每一轮的 <code>turn.output_ids</code> 原样写进训练序列并置 <code>loss_mask=1</code>。见 §1。</div>
+
+  <span class="vbadge vb-ok">安全</span>
+  <div><b>没有「结构化 tool_calls 再渲染回文本」这一步。</b>
+    Terminus2 用 <code>parser_name: json</code>，assistant 的原始输出文本原样进 message history；
+    <code>llm.py:174</code> 还额外存了一份 <code>completion_text</code> 用于文本级校验。见 §2。</div>
+
+  <span class="vbadge vb-warn">需理解</span>
+  <div><b>Terminus2 会删改历史（摘要 / unwind / 截断长输出），但这不会把未 conditioning 的 token 混进 loss。</b>
+    因为 adapter 的对齐是<em>前缀锚定</em>的：任何历史中段的删除都会让前缀匹配失败，
+    transition 退化成 <code>split</code>，开一个全新的干净 chunk。<b>代价不在正确性，在 credit assignment</b>。见 §3。</div>
+
+  <span class="vbadge vb-warn">需监控</span>
+  <div><b>存在一个有界的「边缘容差」窗口</b>：prompt 尾部最多 96 token、response 两端各最多 16 token
+    的差异会被容忍并 stitch（记为 <code>normalized_prefix</code>）。这是唯一真正的小幅 TITO 偏差。见 §4.1。</div>
+
+  <span class="vbadge vb-ok">已修复</span>
+  <div><b>rollout 128k context vs 训练 64k 尾部截断</b> —— 这曾是本 recipe 里最大的 TITO 破坏源，
+    <b>2026-08-17 的改动已经把它修掉了</b>：现在两侧同为 86016，agent 的
+    <code>max_context_tokens</code> 也从 128000 降到 86016（此前它<em>高于</em> SGLang 实际服务的窗口）。
+    <code>_hard_trim_plan</code> 在正常情况下不再触发。仍需<b>监控</b>确认它真的是 0。见 §4.2。</div>
+
+  <span class="vbadge vb-bad">真实问题</span>
+  <div><b>上面这些全都测不到。</b> adapter 已经算好了十几个 conditioning metadata key，
+    但 <code>rollout.py</code> 一个都没聚合上报；唯一能测量损伤的 <code>train/tis_abs</code>
+    诊断也是关着的。<b>这一条至今仍然成立</b>（已复查现脚本，无
+    <code>GET_MISMATCH_METRICS</code>）。见 §5。</div>
+</div>
+
+<div class="note">
+  <b>关于本文的可信度边界：</b>本机<b>没有安装 harbor 源码</b>（<code>find / -name terminus_2.py</code> 为空），
+  所以凡涉及 Terminus2 内部行为的论断，本文一律标注为<span class="chip" style="background:var(--dim2);color:#0b0f16;font-weight:700">推断</span>，
+  并给出它在<b>本仓库代码里</b>的可验证支撑。§1/§2/§3 的判定逻辑本身全部是本仓库代码，已逐行读过。
+</div>
+</section>
+
+<section id="s1">
+<h2><span class="num">1</span>原始 token 全程回放：动作 token 没被重编码过</h2>
+<p class="lead">
+  这正是通用文档第四节「底层核心：原始 Token 回放机制」要求的做法。本仓库已经是这样实现的。
+</p>
+
+<h3>1.1 采样阶段：抓的是 SGLang 真正吐出来的 id</h3>
+<pre><span class="c"># slime_plugins/harbor/llm.py:120-152（call() 内）</span>
+payload = {
+    <span class="s">"input_ids"</span>: prompt_token_ids,      <span class="c"># 注意：送进去的是 token id，不是文本</span>
+    <span class="s">"sampling_params"</span>: sampling_params,
+    <span class="s">"return_logprob"</span>: <span class="k">True</span>,
+}
+...
+meta_info = output.get(<span class="s">"meta_info"</span>) <span class="k">or</span> {}
+token_logprobs   = meta_info.get(<span class="s">"output_token_logprobs"</span>) <span class="k">or</span> []
+completion_token_ids = [<span class="f">int</span>(item[1]) <span class="k">for</span> item <span class="k">in</span> token_logprobs]   <span class="c"># ← 实际采样的 id</span>
+logprobs             = [<span class="f">float</span>(item[0]) <span class="k">for</span> item <span class="k">in</span> token_logprobs]  <span class="c"># ← 同一次前向的 logprob</span></pre>
+
+<div class="ok">
+  <b>两个关键点：</b>
+  ① 请求用的是 <code>input_ids</code> 而不是 <code>text</code> —— prompt 侧也不存在「服务端再 tokenize 一次」的二次分词；
+  ② <code>completion_token_ids</code> 和 <code>logprobs</code> 来自<b>同一个</b> <code>output_token_logprobs</code> 数组，
+  天然逐位对齐，不可能错位。
+</div>
+
+<h3>1.2 训练阶段：output_ids 原样进 loss</h3>
+<pre><span class="c"># slime_plugins/harbor/atif_adapter.py:864-867</span>
+<span class="c"># _normalized_trajectory_samples_from_detail 的主循环，每一轮都执行：</span>
+response_ids.extend(turn.output_ids)                 <span class="c"># 原始 completion_token_ids</span>
+loss_mask.extend([1] * <span class="f">len</span>(turn.output_ids))       <span class="c"># 动作 token → 计梯度</span>
+rollout_log_probs.extend(_turn_log_probs([turn.output_log_probs], 0, <span class="f">len</span>(turn.output_ids)))</pre>
+
+<p>
+  <code>turn.output_ids</code> 就是 §1.1 抓到的 <code>completion_token_ids</code>，中间<b>没有任何
+  decode / 模板渲染 / re-encode</b>。三个数组（token、loss_mask、rollout_log_probs）在同一次循环里同步追加，
+  长度不可能对不上 —— 而且 <code>atif_adapter.py:886-891</code> 和 <code>952-955</code> 各有一道显式断言
+  （不一致就抛 <code>RolloutConversionError</code>）。
+</p>
+
+<div class="tblwrap">
+<table>
+<tr><th>训练序列的组成部分</th><th class="m">loss_mask</th><th>来源</th><th>TITO 状态</th></tr>
+<tr>
+  <td><b>首轮 prompt</b></td><td class="m">—（prompt 段）</td>
+  <td class="m">turns[0].prompt_ids</td>
+  <td>推理时 <code>apply_chat_template</code> 的产物，<b>与推理完全同一份</b></td>
+</tr>
+<tr>
+  <td><b>每轮 assistant 输出</b></td><td class="m">1</td>
+  <td class="m">completion_token_ids</td>
+  <td><span class="chip g">精确</span> 模型实际采样的 id</td>
+</tr>
+<tr>
+  <td><b>轮间 context（工具返回等）</b></td><td class="m">0</td>
+  <td class="m">next_turn.prompt_ids[...]</td>
+  <td>取自<b>下一轮真实送进 SGLang 的 prompt</b> 的增量部分 —— 也是推理时用过的 id</td>
+</tr>
+</table>
+</div>
+
+<div class="ok">
+  <b>注意第三行：</b>轮间 context 并不是「把工具结果重新 tokenize 一遍」，而是从
+  <code>next_turn.prompt_ids</code>（下一轮真实发给 SGLang 的那串 id）里切出来的增量段。
+  所以即便这一段的分词边界与「单独 encode 工具输出」不同，它<b>依然是推理时实际使用过的 id</b>。
+  再加上它 <code>loss_mask=0</code>，不直接产生梯度。
+</div>
+</section>
+
+<section id="s2">
+<h2><span class="num">2</span>没有 tool_call 结构化重渲染这一步</h2>
+<p class="lead">
+  通用文档描述的失效链是：内联 <code>&lt;tool_call&gt;</code> 文本 → 解析成 <code>{"name":..,"arguments":..}</code>
+  → 模板重渲染成块级格式 → 分词边界改变。这条链在本仓库<b>断在第一步</b>。
+</p>
+
+<div class="grid g2">
+<div class="card" style="border-top:3px solid var(--sync)">
+  <h3 style="margin-top:0">通用框架的做法（有问题）</h3>
+  <pre>生成: <span class="s">'call a &lt;tool_call&gt;foo({"x":1})&lt;/tool_call&gt; then'</span>
+  ↓ 解析
+{<span class="s">"content"</span>: <span class="s">"call a  then"</span>,
+ <span class="s">"tool_calls"</span>: [{<span class="s">"name"</span>:<span class="s">"foo"</span>, ...}]}
+  ↓ apply_chat_template 重渲染
+<span class="s">'&lt;tool_call&gt;\n{"name":"foo",...}\n&lt;/tool_call&gt;'</span>
+  ↓ re-encode
+<span class="k">token id 序列已经变了</span></pre>
+</div>
+<div class="card" style="border-top:3px solid var(--rollout)">
+  <h3 style="margin-top:0">本仓库的做法</h3>
+  <pre>生成: content（原始文本，含 JSON 动作）
+  ↓ 原样进 message_history
+messages = [*message_history,
+            {<span class="s">"role"</span>:<span class="s">"user"</span>, <span class="s">"content"</span>: prompt}]
+  ↓ 训练侧根本不看 messages
+response_ids.extend(turn.output_ids)
+  ↓
+<span class="k">用的是采样出的原始 id</span></pre>
+</div>
+</div>
+
+<p>
+  <code>parser_name: json</code> 的解析结果只用于<b>驱动工具执行</b>（决定往终端敲什么命令），
+  <b>不参与训练数据构建</b> —— 这正是通用文档要求的「业务逻辑与训练数据流解耦」。
+  训练侧唯一读的是 <code>rollout_details</code> 里的 <code>prompt_token_ids</code> /
+  <code>completion_token_ids</code>，与解析结果无关。
+</p>
+
+<h3>2.1 额外还存了一份文本，专门用于文本级校验</h3>
+<pre><span class="c"># slime_plugins/harbor/llm.py:169-181，record_rollout_text=True 时</span>
+<span class="c"># （trajectory_retokenized 模式下由 rollout.py:1428-1429 强制打开）</span>
+extra.update({
+    <span class="s">"prompt_text"</span>:     prompt_text,
+    <span class="s">"completion_text"</span>: content,                              <span class="c"># ← assistant 原始输出文本</span>
+    **self._last_assistant_history_projection(messages, prompt_token_ids, ...),
+    <span class="c"># → last_assistant_message_content  下一轮历史里这条 assistant 消息的文本</span>
+    <span class="c"># → last_assistant_message_span     它在下一轮 prompt_ids 里的 [start, end) 区间</span>
+})</pre>
+
+<p>
+  这套 <code>completion_text</code> vs <code>last_assistant_message_content</code> 的比对，
+  就是 <code>trajectory_retokenized</code> 模式判断「这一轮的输出在下一轮历史里是否被改写过」的依据
+  （<code>atif_adapter.py:1095-1100</code>）：<b>文本不一致就拒绝 stitch</b>。
+</p>
+</section>
+
+<section id="s3">
+<h2><span class="num">3</span>核心问题：Terminus 拼接会做删除，会怎样？</h2>
+<p class="lead">
+  Terminus2 <b>确实会删改历史</b> —— 摘要（<code>enable_summarize: true</code>）、上下文 unwind、
+  长工具输出截断，都会让「下一轮的 prompt」不再是「上一轮 prompt + 上一轮输出」的严格延长。
+  本仓库的代码注释自己就明说了这件事：
+</p>
+
+<pre><span class="c"># slime_plugins/harbor/atif_adapter.py:1261-1268（_stitch_turns_preserving_outputs 的 docstring）</span>
+<span class="s">"""Stitch Terminus-style prompts without dropping generated actions.
+
+slime.agent.trajectory.merge_turns assumes later prompts are strict
+continuations of the original chat token stream. Terminus2 re-renders each
+decision point from the current terminal state, so a later prompt often has
+a different base EVEN WITHOUT SUMMARIZATION. For Harbor training we keep
+every assistant output as a supervised target and insert any intervening
+prompt/context tokens as response-side tokens with loss mask 0."""</span></pre>
+
+<div class="ok">
+  <b>答案：删除不会污染 loss，因为对齐是「前缀锚定」的 —— 删除必然打破前缀，从而强制 split。</b>
+  下面是完整的四条判定路径。
+</div>
+
+<h3>3.1 判定链：一次 transition 的四种归宿</h3>
+<p>
+  对每一对相邻轮次 <code>(turn[i], turn[i+1])</code>，<code>_normalized_transition_alignment</code>
+  （<code>atif_adapter.py:996-1093</code>）按顺序尝试：
+</p>
+
+<div class="flow">
+  <div class="fnode" style="--c:var(--rollout)">
+    <div class="fh">① strict_prefix<span class="badge">精确 TITO</span></div>
+    <div class="fp">atif_adapter.py:1004-1013</div>
+    <div class="fd">
+      检查 <code>prompt_ids + output_ids</code> 是否为 <code>next.prompt_ids</code> 的严格前缀。
+      成立 ⇒ 历史完全没被动过，context 就是干净的增量尾部。
+    </div>
+  </div>
+  <div class="farrow"><span>不成立 ↓</span></div>
+
+  <div class="fnode" style="--c:var(--buffer)">
+    <div class="fh">② normalized_prefix<span class="badge">有界容差</span></div>
+    <div class="fp">atif_adapter.py:1015-1050, 1076-1093</div>
+    <div class="fd">
+      三重搜索，允许<b>有界</b>的边缘差异：prompt 尾部丢 <code>suffix_drop</code> 个
+      （上限 = <code>len(common_prompt_suffix)</code> ≤ <b>96</b>），
+      response 头尾各丢 <code>leading_drop</code>/<code>trailing_drop</code>
+      （上限 <code>max_response_edge_drop = </code><b>16</b>）。
+      <b>硬约束</b>：<code>_has_prefix(next.prompt_ids, prompt_base)</code> 必须成立 ——
+      也就是上一轮 prompt（去掉≤96 尾 token）仍须是下一轮 prompt 的<b>前缀</b>。
+    </div>
+  </div>
+  <div class="farrow"><span>前缀约束失败 ↓</span></div>
+
+  <div class="fnode" style="--c:var(--buffer)">
+    <div class="fh">③ retokenized_prefix<span class="badge">文本锚定</span></div>
+    <div class="fp">atif_adapter.py:1052-1064, 1086-1131</div>
+    <div class="fd">
+      仅 <code>trajectory_retokenized</code> 模式启用。要求
+      <code>completion_text == last_assistant_message_content</code>（文本<b>逐字符</b>一致），
+      再用推理时算好的 <code>last_assistant_message_span</code> 跳过重分词区间。
+      <b>但它同样带 <code>_has_prefix(next.prompt_ids, prompt_base)</code> 约束</b>
+      （<code>atif_adapter.py:1113-1116</code>）。
+    </div>
+  </div>
+  <div class="farrow"><span>仍然不成立 ↓</span></div>
+
+  <div class="fnode" style="--c:var(--rollout)">
+    <div class="fh">④ split<span class="badge">开新 chunk · 安全兜底</span></div>
+    <div class="fp">atif_adapter.py:1066-1074 → 815-828</div>
+    <div class="fd">
+      放弃拼接。<code>finalize_chunk()</code> 结束当前 chunk，然后
+      <b><code>prompt_ids = list(turn.prompt_ids)</code> 从下一轮的真实 prompt 重新起头</b>，
+      loss_mask / rollout_log_probs / routing builder 全部重置。
+      ⇒ 新 chunk 的 prompt <b>就是推理时实际用的那一串 id</b>，TITO 精确。
+    </div>
+  </div>
+</div>
+
+<div class="ok">
+  <b>为什么「删除」必然落到 ④：</b>②③ 都要求
+  <code>_has_prefix(next.prompt_ids, prompt_base)</code>，而 <code>prompt_base</code> 只允许从
+  <b>尾部</b>裁掉 ≤96 个 token（<code>_drop_suffix_len</code>）。
+  如果 Terminus 删掉的是历史<b>开头或中段</b>的内容（摘要替换、unwind 旧轮次），
+  那么无论怎么裁尾部，剩下的都不可能还是新 prompt 的前缀 ⇒ 所有候选 <code>continue</code> 掉，
+  <code>best is None</code> ⇒ <b>split</b>。
+  <em>删除在这套判定里是「无法伪装」的 —— 它不可能被误判成可拼接。</em>
+</div>
+
+<div class="note">
+  <span class="chip" style="background:var(--dim2);color:#0b0f16;font-weight:700">推断</span>
+  <b>关于摘要具体走哪条路：</b>本机无 harbor 源码，无法直接读 <code>terminus_2.py</code> 确认摘要
+  是「整体替换 <code>_messages</code>」还是「保留 system 后替换其余」。但<b>两种情况都落到 ④ split</b>：
+  只要摘要改写了历史中段，前缀约束就破；就算摘要只保留 system 前缀，
+  <code>prompt_base</code>（上一轮的完整长 prompt）也不可能是新短 prompt 的前缀。
+  另外摘要会让 <code>completion_text != last_assistant_message_content</code>，③ 也一并失效。
+</div>
+
+<h3>3.2 真正的代价：不是正确性，是 credit assignment 被切碎</h3>
+<p>
+  split 保证了「不把未 conditioning 的 token 混进 loss」，但它<b>确实改变了 RL 问题的结构</b>。
+  一条轨迹被切成 N 个 chunk 后，每个 chunk 都是一个<b>独立的 Sample</b>：
+</p>
+
+<pre><span class="c"># slime/backends/megatron_utils/loss.py:743-750（PPO 分支）</span>
+<span class="k">for</span> reward, k <span class="k">in</span> <span class="f">zip</span>(old_rewards, kl, strict=<span class="k">False</span>):
+    k *= kl_coef
+    <span class="k">if</span> cp_rank == 0:
+        k[-1] += reward          <span class="c"># ← 每个 sample 的最后一个 token 加上完整 terminal reward</span>
+    rewards.append(k)
+advantages, returns = get_advantages_and_returns_batch(...)   <span class="c"># ← 逐 sample 跑 GAE</span></pre>
+
+<div class="tblwrap">
+<table>
+<tr><th>后果</th><th>机制</th><th>严重性</th></tr>
+<tr>
+  <td><b>terminal reward 被复制 N 次</b></td>
+  <td class="m">loss.py:746 对每个 sample 都 k[-1] += reward</td>
+  <td>N 个 chunk 各自当成一个「结局就是这个 reward」的独立 episode</td>
+</tr>
+<tr>
+  <td><b>GAE bootstrap 在 chunk 边界被截断</b></td>
+  <td class="m">get_advantages_and_returns_batch 逐 sample</td>
+  <td>跨 chunk 的时序信用传播<b>断了</b>；早期轮次拿不到后期成功的折扣回传</td>
+</tr>
+<tr>
+  <td>梯度幅度<b>不</b>失控</td>
+  <td class="m">group_mask_sums 按 group（=轨迹）归一</td>
+  <td><span class="chip g">安全</span> 每条轨迹的总 loss 权重保持不变</td>
+</tr>
+<tr>
+  <td>critic 的 value target 结构改变</td>
+  <td class="m">每个 chunk 末尾 bootstrap=0</td>
+  <td>冷启动 critic 会低估长轨迹中段的 value</td>
+</tr>
+</table>
+</div>
+
+<div class="warn">
+  <b>所以「怎么办」的答案是：</b>不需要去修正确性（split 已经是对的），
+  需要做的是<b>知道 split 发生了多少次</b>。
+  <code>atif_adapter.py</code> 已经把它记在
+  <code>harbor_trajectory_normalized_split_after_turns</code> 和
+  <code>harbor_trajectory_num_chunks</code> 里 —— <b>但这两个 key 从来没被上报到 wandb</b>。
+  于是「我的 credit assignment 被切成了几段」这个问题，目前在训练时是<b>不可见</b>的。见 §5。
+</div>
+</section>
+
+<section id="s4">
+<h2><span class="num">4</span>残余风险：真正会造成偏差的两处</h2>
+
+<h3>4.1 有界的边缘容差窗口（96 / 16）</h3>
+<p>
+  路径 ② <code>normalized_prefix</code> 是唯一会<b>容忍</b>不一致并继续拼接的路径。它的窗口是有界的：
+</p>
+<div class="chips">
+  <span class="chip hi">prompt 尾部 ≤ 96 token</span>
+  <span class="chip hi">response 头部 ≤ 16 token</span>
+  <span class="chip hi">response 尾部 ≤ 16 token</span>
+</div>
+<p>
+  这个窗口的设计目的是吸收 Qwen 模板的 prefill 伪影（<code>&lt;|im_start|&gt;assistant\n&lt;think&gt;\n\n&lt;/think&gt;\n\n</code>
+  之类，参见 <code>examples/harbor_terminal_rl/harbor_normalized_trajectory_audit.py:11-24</code> 的说明）。
+</p>
+<div class="note">
+  <b>一个容易误读的细节：</b><code>leading_drop</code> / <code>trailing_drop</code> 只作用于
+  <code>output_projection</code>（用来和下一轮 prompt 做<b>匹配</b>），
+  <b>不影响训练目标</b> —— <code>atif_adapter.py:864</code> 永远 <code>extend(turn.output_ids)</code> 全量。
+  所以 <code>response_suffix_dropped_tokens &gt; 0</code> 的真实含义是：
+  <em>「这一轮输出的尾部 k 个 token，在后续轮次的历史里被 Terminus 改掉/删掉了」</em>。
+  我们仍然按原样训练这些动作 token（对动作本身是 TITO 精确的），
+  但<b>其后 token 的 conditioning 与推理时有 k 个 token 的偏差</b>。
+  代码自己也知道这里可疑 —— <code>atif_adapter.py:831-833</code> 在
+  <code>response_suffix_dropped_tokens &gt; 0</code> 时会给 routing replay 打
+  <code>placeholder_first</code> 标记。
+</div>
+<p>
+  相关 metadata（同样<b>未上报</b>）：<code>harbor_trajectory_normalized_prefix_turns</code>、
+  <code>harbor_trajectory_normalized_prompt_suffix_dropped_tokens</code>、
+  <code>harbor_trajectory_normalized_response_{prefix,suffix}_dropped_tokens</code>。
+</p>
+
+<h3 id="s42">4.2 <span style="color:var(--rollout)">已修复</span>：曾经的 128k rollout vs 64k 训练尾部截断</h3>
+<div class="ok">
+  <b>2026-08-17 的脚本改动已经修掉这一条。</b>下面保留问题的机制说明（因为它是这类 bug 的典型样本，
+  也解释了为什么必须继续监控），但<b>当前配置下正常情况不会触发</b>。
+</div>
+
+<h4 style="font-size:13.5px;color:var(--dim);margin:18px 0 6px;font-family:var(--mono)">曾经的矛盾</h4>
+<pre><span class="c"># 旧配置（已废弃）</span>
+yaml:  llm_kwargs.max_context_tokens: <span class="n">128000</span>   <span class="c"># agent 以为自己有 128k</span>
+sh:    SEQ_LENGTH = HARBOR_MAX_TRAIN_TOTAL_TOKENS = <span class="n">65536</span>   <span class="c"># 训练只有 64k</span>
+       SGLANG_CONTEXT_LENGTH = <span class="n">86016</span>              <span class="c"># 服务端其实只给 84k</span>
+<span class="c"># ⇒ 三个数字互不相同，agent 的 128k 甚至高于服务端的 84k</span></pre>
+
+<pre><span class="c"># slime_plugins/harbor/sample_postprocess.py:269-285 —— 截断策略是「保留尾部」</span>
+<span class="k">def</span> <span class="f">_hard_trim_plan</span>(total_length, response_length, cap):
+    <span class="k">if</span> total_length &lt;= cap:
+        <span class="k">return</span> _TrimPlan(total_length, 0, response_length)   <span class="c"># ← 现在走的是这一支</span>
+    keep    = <span class="f">min</span>(total_length, cap)
+    dropped = total_length - keep
+    prompt_length  = <span class="f">max</span>(0, total_length - response_length)
+    response_drop  = <span class="f">max</span>(0, dropped - prompt_length)   <span class="c"># 先丢光 prompt，再丢 response 开头</span>
+<span class="c"># 调用处 sample_postprocess.py:149 —— sample.tokens = tokens[-keep:]  取尾部</span></pre>
+
+<p style="font-size:13px;color:var(--dim)">
+  当年的后果：超过 64k 的轨迹训练时只看到一个<b>中段窗口</b>，system prompt（任务说明、工具定义、
+  输出格式约定）和早期若干轮被丢掉，而 <code>rollout_log_probs</code> 是在完整 conditioning 下算的。
+  不报错、不 NaN，但 ratio 的分子分母来自两个不同的 conditioning，
+  且受害样本恰好是<b>最长、最难、轮数最多</b>的那批。
+</p>
+
+<h4 style="font-size:13.5px;color:var(--dim);margin:22px 0 6px;font-family:var(--mono)">为什么现在不再触发</h4>
+<div class="tblwrap">
+<table>
+<tr><th>墙</th><th class="m">现值</th><th>作用</th></tr>
+<tr><td>训练 token 预算</td><td class="m">86016</td><td><code>SEQ_LENGTH</code> / <code>HARBOR_MAX_TRAIN_TOTAL_TOKENS</code> ⇒ <code>_get_cap()</code> 的 cap</td></tr>
+<tr><td>agent 自认上限</td><td class="m">86016</td><td>yaml <code>max_context_tokens</code>，由 <code>llm.py:111-117</code> 主动 guard</td></tr>
+<tr><td>SGLang 服务窗口</td><td class="m">86016</td><td><code>SGLANG_CONTEXT_LENGTH</code> / <code>SGLANG_MAX_PREFILL_TOKENS</code></td></tr>
+<tr><td>压缩触发点</td><td class="m">65536</td><td><code>proactive_summarization_threshold</code>，留 20480 给压缩本身</td></tr>
+</table>
+</div>
+<p>
+  关键在于 <b>cap 与 agent 上限现在是同一个数</b>（86016）。<code>llm.py:111-117</code> 保证
+  <code>len(prompt) + max_new_tokens ≤ 86016</code>，而 <code>ROLLOUT_MAX_RESPONSE_LEN=8192</code>，
+  所以任何一轮的 <code>prompt + output</code> 都 ≤ 86016 = cap。
+  再叠上压缩阈值 65536：一个 chunk 的跨度被压缩周期限制在
+  <code>65536 + 8192 = 73728</code>，<b>比 cap 还低 12288</b>。
+  <code>_hard_trim_plan</code> 因此走 <code>total_length &lt;= cap</code> 的早退分支。
+</p>
+
+<div class="note">
+  <b>但仍然要监控，不能假设它是 0：</b>
+  ① 一个 chunk 可能跨越<b>多个</b>压缩周期（若某次 transition 走了 ②③ 而非 split，
+  chunk 会继续累积）—— 理论上 stitch 的累积可以超过 73728；
+  ② §4.1 的边缘容差每次 transition 最多引入 96+32 = 128 token 的对不齐，
+  59 次 transition 的<b>理论</b>上界是 7552 token（实际远低于此，因为压缩会强制 split）。
+  <br>
+  ⇒ <b>盯 <code>harbor/train_context_trimmed_sample_ratio</code>，它应当恒为 0。</b>
+  一旦非 0，说明有 chunk 累积超过了 84k，那才需要回来看这一节。
+</div>
+
+<div class="warn">
+  <b>顺带一个新的观察点（压缩阈值 20000 → 65536）：</b>压缩现在<b>晚得多</b>才触发。
+  由 §3 可知压缩边界会强制 <code>split</code>，所以：
+  压缩变少 ⇒ <b>split 变少</b> ⇒ 每条轨迹的 chunk 数下降 ⇒ §3.2 的 credit-assignment 碎片化<b>减轻</b>（好事）；
+  但同时单个 chunk 变长、stitch 链更长 ⇒ §4.1 边缘容差的<b>累积</b>机会变多（需要看数据）。
+  这两个方向相反的效应，正好由 <code>harbor/avg_chunks_per_trajectory</code> +
+  <code>harbor/normalized_dropped_token_ratio</code> 一起回答 —— 而这两个指标<b>目前都没上报</b>。
+</div>
+</section>
+
+<section id="s5">
+<h2><span class="num">5</span>怎么办：先让它可见，别急着改行为</h2>
+<p class="lead">
+  §3 说明 split 机制本身是对的，不需要修；§4 的两处偏差都已经被<b>算出来了</b>，
+  只是没上报。所以第一优先级是<b>可观测性</b>，而不是改算法。
+</p>
+
+<div class="grid g2">
+<div class="card" style="border-top:3px solid var(--rollout)">
+  <h3 style="margin-top:0">① 打开 mismatch 诊断（2 行 export，零算法风险）</h3>
+  <pre>export GET_MISMATCH_METRICS=1
+export CUSTOM_TIS_FUNCTION_PATH=\
+  slime_plugins.harbor.mismatch_metrics.record_only_tis_function</pre>
+  <p style="font-size:12.5px">
+    白拿 <code>train/tis_abs</code> —— <b>逐 token 直接测量</b> §4.1+§4.2 造成的
+    train/inference 分布漂移。健康值 ≈ 0.02。
+  </p>
+  <p style="font-size:12.5px">
+    <b>已验证零代价</b>：<code>mismatch_metrics.py:82-84</code> 原样返回
+    <code>pg_loss</code>/<code>loss_masks</code>；
+    <code>actor.py:491-505</code> 表明 <code>can_reuse_log_probs_in_loss</code> 因
+    <code>use_critic</code>/<code>keep_old_actor</code>/<code>use_routing_replay</code>
+    早已为 <code>False</code>，<code>compute_log_prob</code> 本来就在跑 ⇒ <b>不增加前向</b>。
+  </p>
+  <div class="warn" style="font-size:12px">
+    <b>千万不要</b>顺手打开 <code>USE_ROLLOUT_LOGPROBS=1</code> ——
+    那会把 PPO ratio 的分母换成 rollout logprob，<b>是算法变更</b>。
+  </div>
+</div>
+
+<div class="card" style="border-top:3px solid var(--buffer)">
+  <h3 style="margin-top:0">② 把已算好的 conditioning metadata 聚合上报</h3>
+  <p style="font-size:12.5px">
+    在 <code>rollout.py</code> 的 <code>_add_sample_health_metrics</code>（现 921-998 行）旁加一个
+    <code>_add_conditioning_metrics()</code>，读 <code>atif_adapter.py:907-953</code> 已经写好的 key。
+  </p>
+  <div class="chips">
+    <span class="chip hi">harbor/tito_exact_sample_ratio</span>
+    <span class="chip">harbor/split_after_turns</span>
+    <span class="chip">harbor/avg_chunks_per_trajectory</span>
+    <span class="chip">harbor/retokenized_prefix_turn_ratio</span>
+    <span class="chip">harbor/normalized_dropped_token_ratio</span>
+    <span class="chip">harbor/conditioning_match_sample_ratio</span>
+  </div>
+  <p style="font-size:12.5px;margin-top:10px">
+    <b>头条指标</b> <code>harbor/tito_exact_sample_ratio</code> =
+    <code>conditioning_match == True</code> <b>且</b>没有 <code>harbor_trimmed_total_length</code>
+    的样本占比 —— 一行话回答「这一步的梯度里有多少来自 policy 真正见过的 context」。
+  </p>
+  <div class="note" style="font-size:12px">
+    走 <code>metrics</code> dict（纯 int/float）这条路，<b>不要</b>往
+    <code>rollout_data</code> 的 list 里塞裸 scalar —— 那会 crash
+    <code>log_rollout_data</code>。
+  </div>
+</div>
+</div>
+
+<h3>5.1 排查顺序（出问题时照这个走）</h3>
+<div class="flow">
+  <div class="fnode" style="--c:var(--sync)">
+    <div class="fh">1 · 看 <code>train/tis_abs</code> 是否尖峰<span class="badge">是否真有漂移</span></div>
+    <div class="fd">正常 ≈0.02。持续 &gt;0.1 或有尖峰 ⇒ 确实存在 train/inference 不一致，继续往下。
+      同时看 <code>train/pg_clipfrac</code>、<code>train/ppo_kl</code> 有没有同步异常。</div>
+  </div>
+  <div class="farrow"><span>↓ 定位是哪一类</span></div>
+  <div class="fnode" style="--c:var(--buffer)">
+    <div class="fh">2 · 用两组指标分流<span class="badge">长度截断 or 重分词</span></div>
+    <div class="fd">
+      <b><code>harbor/train_context_trimmed_sample_ratio</code> 非 0</b> ⇒ §4.2 长度截断。
+      <b>当前 84k 对齐配置下它应恒为 0</b>；非 0 意味着有 chunk 累积突破了 84k。<br>
+      <b><code>harbor/retokenized_prefix_*</code> / <code>normalized_dropped_token_ratio</code> 高</b> ⇒ §4.1 模板/边缘漂移。<br>
+      <b><code>harbor/split_after_turns</code> / <code>avg_chunks_per_trajectory</code> 高</b> ⇒ §3.2 压缩/删除频繁，
+      正确性无虞但 credit assignment 碎片化。<b>压缩阈值升到 65536 后这个数应当明显下降</b>。
+    </div>
+  </div>
+  <div class="farrow"><span>↓ 落到具体 token</span></div>
+  <div class="fnode" style="--c:var(--accent)">
+    <div class="fh">3 · 跑已有的离线审计（<b>不要重写</b>）<span class="badge">token diff</span></div>
+    <div class="fp">python tests/harbor_tito_real_audit.py &lt;case dir&gt; --limit 12</div>
+    <div class="fd">
+      用 KMP 子序列匹配报 <code>exact_subsequence_rate</code> / <code>span_token_exact_rate</code> /
+      <code>retokenized_candidate</code>。<br>
+      <b>前提</b>：它需要带 <code>prompt_token_ids</code> 的 dict，只存在于 case-study JSON dump
+      （<code>rollout.py:1227-1269</code>），<b>不在</b> <code>rollout_dumps/*.pt</code> 里。
+      要先在 config 里加 <code>harbor_case_study_dump_dir</code> + <code>harbor_case_study_max_cases</code>。
+    </div>
+  </div>
+</div>
+
+<h3>5.2 明确<span style="color:var(--sync)">不</span>建议现在做的事</h3>
+<div class="tblwrap">
+<table>
+<tr><th>方案</th><th>为什么先别做</th></tr>
+<tr>
+  <td class="m">切 harbor_sample_mode: turn</td>
+  <td>确实能拿到<b>逐轮精确 TITO</b>（<code>_turn_samples_from_detail</code> 完全不 stitch），
+    但 ① prompt 在每轮重复 ⇒ 每条轨迹 token 量从 O(T) 变 <b>O(T²/2)</b>，
+    <code>max_turns=60</code> + <code>MAX_TOKENS_PER_GPU 8192</code> 下 step time 大概率不可接受；
+    ② 每轮变独立 episode 拿满额 terminal reward ⇒ 与 parent 的轨迹级 GAE 是<b>不同的 RL 问题</b>。</td>
+</tr>
+<tr>
+  <td class="m">新增 trajectory_strict（非 strict_prefix 一律 split）</td>
+  <td>会把 §3.2 的 chunk 碎片化<b>放大</b>，value target 结构变化更剧烈。
+    <b>打破「算法与 parent 一致」</b>。</td>
+</tr>
+<tr>
+  <td class="m">丢弃被截断的样本</td>
+  <td>84k 对齐后 <code>train_context_trimmed_sample_ratio</code> 预期为 0 ⇒ <b>这个方案已无对象，不需要做</b>。
+    （历史理由仍然成立：被截断的样本天然是最长最难的轨迹，丢掉会把 policy 往短/易任务偏，
+    并让 critic 见不到长上下文的 value regime。）</td>
+</tr>
+<tr>
+  <td class="m">在转换处加 assert 抛异常</td>
+  <td><code>harbor_fail_on_conversion_error: true</code> 会把
+    <code>RolloutConversionError</code> 变成<b>整个 rollout 中止</b>
+    （<code>rollout.py:1204-1206</code>）。一个模板空格差异就能干掉 88 张卡。
+    要做成<b>只告警的软阈值</b>。</td>
+</tr>
+</table>
+</div>
+</section>
+
+<section id="s6">
+<h2><span class="num">6</span>源码索引</h2>
+<div class="tblwrap">
+<table>
+<tr><th>位置</th><th>作用</th></tr>
+<tr><td class="m">harbor/llm.py:120-126</td><td>用 <code>input_ids</code> 请求 SGLang（prompt 侧无二次分词）</td></tr>
+<tr><td class="m">harbor/llm.py:150-152</td><td>从 <code>output_token_logprobs</code> 取原始 <code>completion_token_ids</code> + logprobs</td></tr>
+<tr><td class="m">harbor/llm.py:169-181</td><td><code>completion_text</code> / <code>last_assistant_message_{content,span}</code> 记录</td></tr>
+<tr><td class="m">harbor/llm.py:250-262</td><td><code>_encode_messages</code>：唯一的 <code>apply_chat_template</code> 生产调用</td></tr>
+<tr><td class="m">harbor/llm.py:294-333</td><td>span 投影（先试 offset mapping，失败才回退模板前后缀比对）</td></tr>
+<tr><td class="m">harbor/atif_adapter.py:996-1093</td><td><b>四路判定链</b> strict / normalized / retokenized / split</td></tr>
+<tr><td class="m">harbor/atif_adapter.py:1086-1131</td><td><code>_retokenized_transition_context</code>：文本一致 + span 锚定</td></tr>
+<tr><td class="m">harbor/atif_adapter.py:815-828</td><td>split 分支：<code>finalize_chunk</code> + 从真实 prompt 重新起头</td></tr>
+<tr><td class="m">harbor/atif_adapter.py:864-867</td><td>output_ids 原样进 loss（<code>loss_mask=1</code>）</td></tr>
+<tr><td class="m">harbor/atif_adapter.py:907-953</td><td><b>全部 conditioning metadata</b>（已算好，未上报）</td></tr>
+<tr><td class="m">harbor/atif_adapter.py:886-891, 952-955</td><td>长度一致性断言 → <code>RolloutConversionError</code></td></tr>
+<tr><td class="m">harbor/atif_adapter.py:1261-1268</td><td>docstring：Terminus2 会重渲染、prompt base 会变</td></tr>
+<tr><td class="m">harbor/sample_postprocess.py:269-285</td><td><code>_hard_trim_plan</code>：<b>保留尾部</b>的截断（§4.2；84k 对齐后不再触发）</td></tr>
+<tr><td class="m">harbor/sample_postprocess.py:242-251</td><td><code>_get_cap</code>：cap 来自 <code>HARBOR_MAX_TRAIN_TOTAL_TOKENS</code>（现 86016）</td></tr>
+<tr><td class="m">harbor/llm.py:111-117</td><td>agent 侧 <code>prompt + max_new ≤ max_context_tokens</code> 主动 guard（现 86016）</td></tr>
+<tr><td class="m">harbor/rollout.py:921-998</td><td><code>_add_sample_health_metrics</code>：该加 conditioning 聚合的地方</td></tr>
+<tr><td class="m">harbor/rollout.py:990-996</td><td>已上报的 trim 指标（目前唯一能看见 §4.2 的窗口）</td></tr>
+<tr><td class="m">harbor/rollout.py:1057-1064</td><td>hook 顺序：<b>filter 早于 process</b> ⇒ filter 看不到 trim metadata</td></tr>
+<tr><td class="m">harbor/rollout.py:1428-1429</td><td><code>trajectory_retokenized</code> 强制 <code>record_rollout_text=True</code></td></tr>
+<tr><td class="m">harbor/mismatch_metrics.py:54-84</td><td>record-only TIS：<code>pg_loss</code> 原样返回</td></tr>
+<tr><td class="m">megatron_utils/loss.py:743-750</td><td>PPO：<b>每个 sample</b> 末尾 <code>+= reward</code> 并逐 sample 跑 GAE（§3.2 根因）</td></tr>
+<tr><td class="m">megatron_utils/actor.py:491-505</td><td><code>can_reuse_log_probs_in_loss</code>：证明打开 mismatch 指标不加前向</td></tr>
+<tr><td class="m">tests/harbor_tito_real_audit.py</td><td>离线 token 级审计（KMP 子序列）—— <b>已存在，别重写</b></td></tr>
+<tr><td class="m">tests/test_harbor_tito_smoke.py</td><td>合成两轮 TITO 测试 + 模式消融</td></tr>
+</table>
+</div>
+</section>
+
+</main>
+
+<footer>
+  本文所有代码行号基于撰写时的工作区状态，改动代码后请重新核对。<br>
+  标注<span class="chip" style="background:var(--dim2);color:#0b0f16;font-weight:700">推断</span>的段落未经 harbor 源码验证（本机未安装 <code>harbor</code> 包）。
+</footer>
+
+</body>
+</html>

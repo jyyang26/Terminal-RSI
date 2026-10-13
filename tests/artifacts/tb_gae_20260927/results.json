@@ -1,0 +1,110 @@
+{
+  "date": "2026-09-27",
+  "tests": 201,
+  "passed": 201,
+  "failed": 0,
+  "skipped": 0,
+  "wall_seconds": 285.91,
+  "tb_tests": 117,
+  "existing_regression_tests": 84,
+  "environment": {
+    "torch": "2.11.0+cu129",
+    "pytest": "9.0.3",
+    "device": "cpu",
+    "distributed_backend": "gloo",
+    "cp_sizes": [
+      1,
+      4
+    ]
+  },
+  "suites": {
+    "tests.test_tb_gae_config": {
+      "tests": 59,
+      "seconds": 5.089,
+      "failures": 0,
+      "skipped": 0
+    },
+    "tests.test_tb_gae_zero_regression": {
+      "tests": 23,
+      "seconds": 16.454,
+      "failures": 0,
+      "skipped": 0
+    },
+    "tests.test_tb_gae_math": {
+      "tests": 27,
+      "seconds": 0.224,
+      "failures": 0,
+      "skipped": 0
+    },
+    "tests.test_tb_gae_cp_smoke": {
+      "tests": 8,
+      "seconds": 256.096,
+      "failures": 0,
+      "skipped": 0
+    },
+    "tests.test_harbor_atif_adapter": {
+      "tests": 18,
+      "seconds": 0.002,
+      "failures": 0,
+      "skipped": 0
+    },
+    "tests.test_harbor_sample_postprocess": {
+      "tests": 2,
+      "seconds": 0.0,
+      "failures": 0,
+      "skipped": 0
+    },
+    "tests.utils.test_megatron_role_config.TestMegatronRoleConfig": {
+      "tests": 6,
+      "seconds": 0.011,
+      "failures": 0,
+      "skipped": 0
+    },
+    "tests.test_dp_schedule": {
+      "tests": 12,
+      "seconds": 0.0,
+      "failures": 0,
+      "skipped": 0
+    },
+    "tests.test_ppo_sc_args": {
+      "tests": 42,
+      "seconds": 0.031,
+      "failures": 0,
+      "skipped": 0
+    },
+    "tests.test_ppo_sc_pipeline": {
+      "tests": 4,
+      "seconds": 0.965,
+      "failures": 0,
+      "skipped": 0
+    }
+  },
+  "source_sha256": {
+    "slime/utils/tb_gae_config.py": "6e9561a7646a22988dcabdcab37eee14db246b19c633a678994ab6cd4be94766",
+    "slime/utils/arguments.py": "333fc0a49b7c91bec828fd9edb9e3f40773047109cbb08ec3997ce904c609b30",
+    "slime_plugins/harbor/tb_gae_data.py": "5bb6e8ffc3db293f46607d18ccb1a3c890975d69a8f3a29007d48912f0473eec",
+    "slime_plugins/harbor/tb_gae.py": "1acaddb6eab36ffeb374b74433731d69b3eacc65b83ed604ed445c5b829c99bf",
+    "slime_plugins/harbor/atif_adapter.py": "45bf31d40bd1e9c86a19dbee280ba3f010150621a3aa2fdb3ea0aadb9a69f485",
+    "slime_plugins/harbor/rollout.py": "7f5c84236493d704e33cb72ad4b017eaa707ef6c87da8df6da25a7d079976ccf",
+    "slime_plugins/harbor/sample_postprocess.py": "6f14c377ca8891523691c904942356d505c355af815f0b05a0fbfaa2fac878ff",
+    "slime/ray/rollout.py": "1a3b039ae71d75ebcd2bfa2617f7910a2647f1964e0e584d5e552d8a75a96580",
+    "slime/backends/megatron_utils/loss.py": "1e9136b774c09f955a0630495a66a756784bb61f0078e0639a695ab77cf9f54a",
+    "slime/backends/megatron_utils/data.py": "4ce597a23d94d6e38ea33f8d05d534ddd6ab991c5b3f40d2b61ced6a134aac90",
+    "tests/test_tb_gae_config.py": "082e880f80093a1e1612934ab5431592f88dea51520e6a9e121fb9df95458a42",
+    "tests/test_tb_gae_cp_smoke.py": "e2bdea53512528d379ab2649ba761b655fcebfd85811f8fee92b4f199735667e",
+    "tests/test_tb_gae_zero_regression.py": "d16eba5e18703abf6926449ead61f8df5481918d35722b82fec2aaa28d14c1d4",
+    "tests/test_tb_gae_math.py": "ec09e8d0e3ddcc5383e5b072646ae18ce3ceb9da979fd2fdc560087ea4b7c1ca",
+    "tests/tb_gae_test_utils.py": "6161bc17eaa2db305310693ea8a6f256bc351443a0fec983f6caf0fb4fedec13",
+    "tests/tb_gae_cp_worker.py": "240c2e2e29d64de843a6904f296e2feba2c21dba779c1e137ce82979666f567c"
+  },
+  "long_cpu_probe": {
+    "response_tokens": 262144,
+    "seconds": 0.0278843455016613,
+    "s3_max_abs_return_error": 3.331899642944336e-05
+  },
+  "limits": [
+    "No GPU/NCCL or online training executed",
+    "Explicit terminated single-chunk trajectories only",
+    "Native PPO extreme short-sequence rank0-empty reward indexing remains unchanged"
+  ]
+}

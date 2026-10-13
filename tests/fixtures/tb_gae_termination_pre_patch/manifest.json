@@ -1,0 +1,22 @@
+{
+  "/path/to/workspace/harbor/src/harbor/agents/terminus_2/terminus_2.py": {
+    "snapshot": "terminus_2.py.txt",
+    "sha256": "d2b71ac3eddfe28762b0adc5611eceb720f5c573add6b9bd20edc7c614d678bb"
+  },
+  "/path/to/workspace/slime-terminal-RL/slime_plugins/harbor/rollout.py": {
+    "snapshot": "rollout.py.txt",
+    "sha256": "7f5c84236493d704e33cb72ad4b017eaa707ef6c87da8df6da25a7d079976ccf"
+  },
+  "/path/to/workspace/slime-terminal-RL/slime_plugins/harbor/tb_gae_data.py": {
+    "snapshot": "tb_gae_data.py.txt",
+    "sha256": "5bb6e8ffc3db293f46607d18ccb1a3c890975d69a8f3a29007d48912f0473eec"
+  },
+  "/path/to/workspace/slime-terminal-RL/TB_GAE_IMPLEMENTATION_REPORT_20260927.md": {
+    "snapshot": "TB_GAE_IMPLEMENTATION_REPORT_20260927.md.txt",
+    "sha256": "2a7cccb54e82d354886f50c87645c0d9a0d21026de69198171bb5d2aa1c52994"
+  },
+  "/path/to/workspace/slime-terminal-RL/slime_plugins/harbor/trial_worker.py": {
+    "snapshot": "trial_worker.py.txt",
+    "sha256": "082f7d2bcf4f0eb8d54956767aabd8d955a98b607e8adc5c97d0be4775563bfb"
+  }
+}

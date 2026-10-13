@@ -1,0 +1,147 @@
+{
+  "date": "2026-09-29",
+  "passed": 338,
+  "failed": 0,
+  "skipped": 0,
+  "wall_seconds": {
+    "backend": 321.38,
+    "harbor": 5.42,
+    "harbor_unit": 4.05
+  },
+  "suites": {
+    "backend": {
+      "tests.test_tb_gae_bootstrap": {
+        "tests": 24,
+        "seconds": 0.758
+      },
+      "tests.test_tb_gae_math": {
+        "tests": 27,
+        "seconds": 0.226
+      },
+      "tests.test_tb_gae_zero_regression": {
+        "tests": 23,
+        "seconds": 16.146
+      },
+      "tests.test_tb_gae_config": {
+        "tests": 59,
+        "seconds": 0.711
+      },
+      "tests.test_tb_gae_bootstrap_distributed": {
+        "tests": 2,
+        "seconds": 33.039
+      },
+      "tests.test_tb_gae_cp_smoke": {
+        "tests": 8,
+        "seconds": 258.784
+      },
+      "tests.test_dp_schedule": {
+        "tests": 12,
+        "seconds": 0.0
+      },
+      "tests.utils.test_megatron_role_config.TestMegatronRoleConfig": {
+        "tests": 6,
+        "seconds": 0.011
+      },
+      "tests.test_ppo_sc_args": {
+        "tests": 42,
+        "seconds": 0.03
+      },
+      "tests.test_ppo_sc_pipeline": {
+        "tests": 4,
+        "seconds": 0.123
+      }
+    },
+    "harbor": {
+      "tests.test_tb_gae_bootstrap_agent": {
+        "tests": 8,
+        "seconds": 0.219
+      },
+      "tests.test_tb_gae_termination_smoke": {
+        "tests": 36,
+        "seconds": 0.288
+      },
+      "tests.test_tb_gae_error_propagation": {
+        "tests": 14,
+        "seconds": 0.271
+      },
+      "tests.test_harbor_atif_adapter": {
+        "tests": 18,
+        "seconds": 0.002
+      },
+      "tests.test_harbor_sample_postprocess": {
+        "tests": 2,
+        "seconds": 0.0
+      },
+      "tests.test_harbor_rollout_async": {
+        "tests": 22,
+        "seconds": 0.336
+      },
+      "tests.test_harbor_eval_count_metrics.TestEvalCountMetrics": {
+        "tests": 8,
+        "seconds": 0.0
+      },
+      "tests.test_harbor_eval_count_metrics.TestEvalTrajectoryDedup": {
+        "tests": 1,
+        "seconds": 0.0
+      },
+      "tests.test_harbor_eval_count_metrics": {
+        "tests": 2,
+        "seconds": 0.0
+      }
+    },
+    "harbor_unit": {
+      "tests.unit.agents.terminus_2.test_terminus_2_mcp.TestMcpPromptInjection": {
+        "tests": 6,
+        "seconds": 0.001
+      },
+      "tests.unit.agents.terminus_2.test_terminus_2_temperature": {
+        "tests": 4,
+        "seconds": 0.002
+      },
+      "tests.unit.agents.terminus_2.test_tmux_session": {
+        "tests": 10,
+        "seconds": 0.085
+      }
+    }
+  },
+  "source_sha256": {
+    "slime_plugins/harbor/atif_adapter.py": "3e22a09f81dfc7f4ed2513e8df0f0c61428dd663b9cd975f90fa30f89c4d6d7a",
+    "slime_plugins/harbor/llm.py": "3d28fecf2a77674bf3a2d694e0613484e9715974a8d5b8114937200090b6addf",
+    "slime_plugins/harbor/tb_gae.py": "bd2c11048dc3d4c5f4a758936f6fb26ba479fe68b9882a49c2eabcd50643b4a0",
+    "slime_plugins/harbor/tb_gae_data.py": "033b082a7f84ff5dfae17122ed3d551c789328007764cee2c177c9e675f5ce4d",
+    "slime_plugins/harbor/tb_gae_termination.py": "a7f966cc97e72a9298a4d93b64177a8489c2a28efa9c84d99256b64feed99bf1",
+    "slime_plugins/harbor/tb_gae_boundary.py": "2f460a83964cce4598fd9df6c4dfc9e1480df73f93aa4c96897471a07be29ffa",
+    "slime_plugins/harbor/tb_gae_chunks.py": "dd7bf17bca6d6be1dc4c402ba32e5c8b668300eb0c5d683616a31d4f8810a37e",
+    "slime_plugins/harbor/sample_postprocess.py": "8fc57644657ceb36fdfb37a9e924ec8f9f0be08c09c64b74534d9b93bf8de9dd",
+    "slime/ray/rollout.py": "76ce3fb1fa6b17ca9e71582fe7e394229f18cd7f15a72bee17152f71a7315258",
+    "slime/backends/megatron_utils/actor.py": "a50cd8194db546acf335148dc5b8c511f97a272b4586a13f099d41c7040ed261",
+    "slime/backends/megatron_utils/data.py": "611e3c7273d1dc31341220db4472885df8ce7c8cf5b275b040c9edbd537a899f",
+    "slime/backends/megatron_utils/tb_gae_bootstrap.py": "30c12978fbcdefe1bcdc59d6c3b06f14a74b94b14f599e226c3655e7b238599b",
+    "slime/utils/tb_gae_config.py": "725b5777bf5d1f5cf448c425a60b321732c50ea61112c7491816edea3904c061",
+    "../harbor/src/harbor/agents/terminus_2/terminus_2.py": "f5f8ea15a86514e0b9ff57e57a752c6e5f21bd353b4e7943bedc0a38bb795b20",
+    "tests/test_tb_gae_bootstrap.py": "c3484d9bed2487a9e8a8be6af933e6354734b1505dae57aa01aff892cbbb0728",
+    "tests/test_tb_gae_bootstrap_agent.py": "3097c6ff4a67ea9af36b6b7034ddf6cfd20d2fb691b0019a800df655874f65a2",
+    "tests/test_tb_gae_bootstrap_distributed.py": "b706414803ba08b26858d8d30df7e9e5ebb6ff74cc64ddf86b437e81fc61e63e",
+    "tests/tb_gae_bootstrap_distributed_worker.py": "56683d34c3d7e28e4b2c7ba9e18aa17664c7e778b952f09e67cf239b5c06b0b5",
+    "tests/test_tb_gae_termination_smoke.py": "d7b7b8baf37e2fc2b5df85c1f1b11aa12dd7f51a8b8f7592f8d100c6ad3592e3",
+    "tests/test_tb_gae_error_propagation.py": "0eba5c21194c779d9f39d45faa9ef5798a13965452dde11322de46a97fb3e966",
+    "tests/test_tb_gae_math.py": "450fc9432c7b781a20446793ef6e66ffe7cd4a6e7a39da03ee3cdfc3d9ee977f",
+    "tests/test_tb_gae_zero_regression.py": "0f2b2f71679fe2ddfd369e9e56ca91900fab422b1399544290e970520d6fd5bf",
+    "tests/tb_gae_test_utils.py": "eb2dcaafb55e7c592b0415da7a2fc95008357e3530b72ac9ffa83383a4fc2f36"
+  },
+  "tested_topology": {
+    "CPU_Gloo": [
+      "DP1 CP1",
+      "DP2 CP1",
+      "DP2 CP4"
+    ],
+    "real_pipeline_parallel_training": false,
+    "real_gpu_training": false
+  },
+  "limits": [
+    "No online 27B/256k/GPU/PP2 smoke performed",
+    "Successor context uses last seq_length-1 tokens",
+    "Truncated sample needs a recoverable successor state",
+    "Unsupported: subagents/multi-step/BSHD/routing replay/SC/OPD"
+  ]
+}

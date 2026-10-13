@@ -1,0 +1,26 @@
+# Terminal-RSI | RPR-2 per-role Megatron overrides (passed via --megatron-config-path).
+#
+# Identical to megatron_roles_rpr1.yaml except the actor learning rate, which is cut
+# to 1/5 (5e-7 -> 1e-7) for the second policy-refinement phase. The critic is
+# unchanged (actor:critic lr ratio becomes 1:150).
+#
+#   actor : lr 1e-7 (constant), clip_grad inherited (1.0)
+#   critic: lr 1.5e-5, value_clip 4.0, clip_grad 100.0
+#
+# The per-role actor block is authoritative; the launcher also passes --lr 1e-7 so
+# the top-level value agrees.
+
+megatron:
+  - name: terminal-rsi-27b-actor
+    role: actor
+    overrides:
+      lr: 1.0e-7
+      min_lr: 1.0e-7
+
+  - name: terminal-rsi-27b-critic
+    role: critic
+    overrides:
+      lr: 1.5e-5
+      min_lr: 1.5e-5
+      value_clip: 4.0
+      clip_grad: 100.0

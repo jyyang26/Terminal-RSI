@@ -1,0 +1,55 @@
+# Full terminal-bench-2 Harbor rollout config using augmented SIFs that include
+# Harbor runtime dependencies (uvicorn/fastapi/tmux). This variant trains on
+# all assistant turns in a trajectory while preserving one GRPO sample per
+# trajectory.
+
+harbor_tasks_dir: /path/to/workspace/code/terminal-bench-2-main
+harbor_tasks_glob: "*/task.toml"
+harbor_tasks_offset: 0
+
+harbor_trial_defaults:
+  trials_dir: /path/to/workspace/slime_harbor_trials/tb2_full89_runtime_trajectory
+  timeout_multiplier: 1.0
+  agent:
+    import_path: slime_plugins.harbor.agent:SlimeTerminus2
+    model_name: slime-policy
+    kwargs:
+      parser_name: json
+      max_turns: 20
+      collect_rollout_details: true
+      enable_summarize: false
+      record_terminal_session: false
+      llm_backend: slime_sglang
+      llm_kwargs:
+        apply_chat_template_kwargs:
+          enable_thinking: false
+  environment:
+    import_path: slime_plugins.harbor.singularity_env:SlimeSingularityEnvironment
+    kwargs:
+      singularity_image_cache_dir: /path/to/workspace/harbor_sif_cache_tb2_full_harbor_runtime
+      singularity_no_mount: home,tmp,bind-paths,proc
+      singularity_bind_host_proc: true
+      singularity_registry_proxy: http://star-proxy.oa.com:3128
+      singularity_registry_mirror: docker.1panel.live
+
+harbor_sample_mode: trajectory
+harbor_reward_key: reward
+harbor_num_concurrent_trials: 16
+harbor_fail_on_conversion_error: true
+harbor_fail_on_trial_error: false
+
+# Spread Harbor/Terminus trial execution across rollout nodes instead of
+# launching every singularity/apptainer container from the RolloutManager node.
+harbor_trial_node_spread: true
+harbor_trials_per_node: 4
+harbor_trial_worker_num_cpus: 0.05
+harbor_trial_worker_startup_timeout_sec: 30
+harbor_trial_worker_healthcheck_timeout_sec: 5
+harbor_trial_remote_timeout_sec: 7200
+
+# GRPO expects fixed-size prompt groups for reward normalization. Trajectory
+# mode keeps one train sample per Terminus/Harbor trial, so a full group is
+# still n_samples_per_prompt trajectories for the same task.
+harbor_require_full_rollout_groups: true
+harbor_rollout_group_attempt_multiplier: 4
+harbor_retry_missing_samples: 0

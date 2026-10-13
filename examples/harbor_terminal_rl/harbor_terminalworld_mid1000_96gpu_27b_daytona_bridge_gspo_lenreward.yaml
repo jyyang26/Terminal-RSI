@@ -1,0 +1,122 @@
+# RESTART config: TerminalWorld MID-1000 (tasks 500-1499 of by_length) on Daytona,
+# 96-GPU Qwen3.5-27B fully-async. GSPO + length-aware reward shaping, BRIDGE mode,
+# KL OFF, no rollout-logprobs. Used by
+# run_terminalworld_mid1000_96gpu_27b_daytona_bridge_gspo_lenreward_fully_async.sh.
+#
+# >>DATA CHANGE vs the full1530 curriculum yaml: skip the easiest 500 tasks and
+# train on the MIDDLE 1000 (harbor_tasks_offset: 500, harbor_tasks_limit: 1000).
+# The data source lists tasks with sorted(tasks_dir.glob("*/task.toml")) then slices
+# task_dirs[offset:][:limit] (data_source.py), so offset 500 + limit 1000 selects
+# exactly the 501st..1500th by_length symlinks (verified: index 500 = 000501_len00013,
+# the slice ends just before 001500_len00140). NO shuffle -- still an ascending
+# difficulty curriculum, just starting at MEDIUM difficulty. Rationale: the prior
+# full-curriculum run wasted ~72% of early-step gradient on all-pass/all-fail
+# (zero-signal) easy groups and overfit a sloppy 2-turn shortcut; a harder start
+# keeps more groups in the learnable (mixed-reward) band. See
+# DIAGNOSIS_gspolen_20260616_run.md.
+#
+# REWARD DESIGN (unchanged from the gspo_lenreward run):
+#   - GSPO advantage estimator (wrapper: ADVANTAGE_ESTIMATOR=gspo, EPS_CLIP=4e-4).
+#   - length-aware reward shaping ON (HARBOR_LENGTH_REWARD_LAMBDA=0.2): among the
+#     SUCCESSFUL trajectories of a prompt group, shorter total output -> higher
+#     reward (bounded +/- lambda/2 of terminal); failures stay 0; hook does its own
+#     group normalization. Terminal binary checker is the base reward.
+#   - entropy loss OFF; KL OFF (bridge mode has no Megatron ref model, and KL=0.001
+#     was too weak to matter last run); rollout-logprobs OFF.
+#   - token-capping postprocess KEPT.
+#
+# CONCURRENCY: n=20 samples/group, partial cutoff accepts first 16 and cancels the
+# 4-trial tail, 20 groups in flight => 320 concurrent sandboxes (proven capacity).
+
+harbor_tasks_dir: /path/to/workspace/code/harbor-code-synthesis/TerminalWorld/unpacked/by_length
+harbor_tasks_glob: "*/task.toml"
+# Start at task 700 (was 500 — the 500-700 range was still too easy / produced too
+# many all-pass zero-signal groups). 700..1529 of the by_length curriculum = 830
+# tasks (1530 total). limit 1000 > remaining, so the slice clamps to all 830.
+harbor_tasks_offset: 700
+harbor_tasks_limit: 1000
+
+# Held-out EVAL pool: Terminal-Bench 2 (89 tasks, */task.toml). Independent of the
+# training pool above. The Harbor data source loads it into self.eval_entries and
+# the eval rollout (slime --eval-interval) iterates the FULL set once per pass
+# without advancing the training (curriculum) cursor. Same task.toml structure as
+# training, so the agent/sandbox path is identical. Disable eval by clearing
+# EVAL_INTERVAL in the wrapper (these keys then go unused).
+harbor_eval_tasks_dir: /path/to/workspace/code/terminal-bench-2-main
+harbor_eval_tasks_glob: "*/task.toml"
+
+harbor_trial_defaults:
+  trials_dir: /path/to/workspace/slime_harbor_trials/terminalworld_mid1000_96gpu_27b_daytona_bridge_gspo_lenreward
+  timeout_multiplier: 1.0
+  agent:
+    import_path: slime_plugins.harbor.agent:SlimeTerminus2
+    model_name: slime-policy
+    override_timeout_sec: 1800
+    kwargs:
+      parser_name: json
+      max_turns: 60
+      collect_rollout_details: true
+      enable_summarize: true
+      # context-wall fix proven in the valid359 + tiny runs.
+      proactive_summarization_threshold: 20000
+      trajectory_config:
+        raw_content: true
+        linear_history: true
+      record_terminal_session: false
+      llm_backend: slime_sglang
+      llm_kwargs:
+        apply_chat_template_kwargs:
+          enable_thinking: false
+        max_context_tokens: 64000
+  environment:
+    type: daytona
+    delete: true
+    override_storage_mb: 10240
+    kwargs:
+      connection_pool_maxsize: 128
+      # Backstop against sandbox LEAKS (a stop() that never ran -- creation-race
+      # or shutdown-cancellation orphan). Daytona's auto_delete clock starts
+      # only AFTER a sandbox is STOPPED, so auto_delete alone is inert while a
+      # leaked sandbox stays `started` forever (auto_stop defaults to 0 = never).
+      # MUST set auto_stop too: leaked sandbox idle -> auto_stop 45min ->
+      # auto_delete 10min later. auto_stop (45) > override_timeout_sec (1800s
+      # =30min) so a live trial is never reaped mid-run. Healthy trials are
+      # deleted immediately by stop(); these knobs only catch leaks.
+      auto_stop_interval_mins: 45
+      auto_delete_interval_mins: 10
+
+harbor_sample_mode: trajectory_retokenized
+harbor_group_unit: trajectory
+harbor_reward_key: reward
+
+# n=20 launched per group, accept first 16 trainable trajectories, cancel the
+# 4-trial tail; 20 groups in flight => 320 concurrent sandboxes (proven capacity,
+# 3200GiB < 5000GiB tier4 quota).
+harbor_num_concurrent_trials: 320
+harbor_fully_async_max_concurrent_groups: 20
+harbor_partial_group_min_units: 16
+
+harbor_trial_node_spread: true
+# 320 trials / 8 rollout nodes = 40 trial-worker actors/node (num_cpus 0.05 => 2 CPU/node;
+# sandbox compute is remote). trials_per_node * rollout_nodes (40*8=320) >= num_concurrent.
+harbor_trials_per_node: 40
+harbor_trial_worker_num_cpus: 0.05
+harbor_trial_worker_startup_timeout_sec: 120
+harbor_trial_worker_healthcheck_timeout_sec: 30
+harbor_kill_unhealthy_trial_workers: false
+harbor_fallback_to_inprocess_trials: false
+harbor_trial_remote_timeout_sec: 21600
+rollout_cleanup_function_path: slime_plugins.harbor.fully_async_rollout.cleanup_rollout
+harbor_fully_async_shutdown_drain_timeout_sec: 30
+harbor_fully_async_shutdown_join_timeout_sec: 45
+
+harbor_fail_on_conversion_error: true
+harbor_fail_on_trial_error: false
+# Relaxed from true: if a few sandboxes leak/fail and a group can't reach the
+# full 16 units, train on the partial batch (>=partial_group_min_units) instead
+# of crashing the whole run with a RuntimeError.
+harbor_require_full_rollout_groups: false
+# Bumped 8 -> 12: more retry headroom for the group attempt budget so transient
+# Daytona create failures don't exhaust attempts before enough groups complete.
+harbor_rollout_group_attempt_multiplier: 12
+harbor_retry_missing_samples: 0

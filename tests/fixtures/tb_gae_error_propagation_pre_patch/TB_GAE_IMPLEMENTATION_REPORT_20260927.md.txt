@@ -1,0 +1,498 @@
+# TB-GAE 首期落地与离线验收报告
+
+日期：2026-09-27。依据 `TB4_REWARD_TBGAE_PATCH.md` 第 9–10 节实施。
+
+> **2026-09-29 修复更新：`termination_kind` 无生产者的阻塞已修复。**
+> 实际使用的 Harbor Terminus-2 已在真实退出事件处记录原因，Slime 在 TB 开启时自动启用生产者，
+> 并在创建 trial 前检测旧版 Harbor。新增真实 agent/Chat/parser/Factory/Trial smoke 已通过，
+> 本轮共 **92 项通过**；具体代码、部署步骤和测试范围见第 5 节。
+> **自然终止的单 chunk 通路可用；含 max_turns/timeout 截断或多 chunk 的生产全量仍不能直接启用。**
+> 本轮没有实现这些非终止尾部的 bootstrap，没有启动集群训练。
+
+**结果：首期数据通路和算法已实现，201/201 离线测试通过，0 失败、0 跳过。**
+其中 TB 专项 117 项，既有 Harbor/DP/角色/SC 回归 84 项；最终整套耗时 285.91 秒。
+仅使用 CPU/Gloo，没有启动集群训练、GPU/NCCL 测试或修改生产启动配置。
+
+**生产启用边界：**本次实现文档定义的首期能力，即 THD、普通 zigzag CP=1/4、单 detail、
+单 chunk、可信真实终止、KL reward 系数 0、SC/OPD 关闭。
+9 月 27 日的版本缺少 `agent_result.metadata.termination_kind` 生产者；9 月 29 日已补齐，
+但只有真实自然结束才输出 `terminated`。跨 chunk、外部截断 bootstrap、BSHD 尚未开放，
+不能仅凭本报告宣称当前 fresh_base 全量训练已可直接启用。加载旧 Harbor 时会在 trial 创建前报错。
+没有用 EOS/stop、成功 reward 或 COMPLETED 状态猜测终止，也没有静默过滤困难轨迹。
+
+## 1. 文件清单
+
+| 文件 | 状态与核心改动 |
+|---|---|
+| `slime/utils/tb_gae_config.py` | 新增：严格 bool；显式 CLI > 任务 YAML > 角色顶层 > 默认 False；两项轮次参数默认 1.0；角色局部 TB 参数禁用；校验所有有效角色配置 |
+| `slime/utils/arguments.py` | 注册参数，保留显式 CLI 来源，统一 YAML 合并，创建 worker 前验证，开启时记录最终参数 |
+| `slime_plugins/harbor/tb_gae_data.py` | 新增：CPU bool 紧凑 masks、span/终止验证、全样本收集、同步切片；未知终止/多 chunk 显式失败 |
+| `slime_plugins/harbor/atif_adapter.py` | 三个入口增加 keyword-only `enable_tb_gae=False`；仅 True 记录实际输出 spans、生成两 masks |
+| `slime_plugins/harbor/rollout.py` | `_run_one_trial` 仅训练且 True 时将开关传到 adapter；eval 不生成 TB masks |
+| `slime_plugins/harbor/sample_postprocess.py` | True 时按同一 response slice 裁两 masks；GAE 后的 cap 只校验、不重裁 |
+| `slime/ray/rollout.py` | True 时 convert 验证并提升 metadata；DP 沿原 partition 传两字段；原白名单和调度不变 |
+| `slime_plugins/harbor/tb_gae.py` | 重构：标量 outcome 落最后有效 action；full masks + ragged local values；真实调用 CP wrapper；原生 slice；no_grad/detach；并行反向 affine scan |
+| `slime/backends/megatron_utils/loss.py` | 原 custom/PPO 前增加 True 分支，两角色共享；原 PPO reward 构造与 GAE 调用未重构 |
+| `slime/backends/megatron_utils/data.py` | True 时日志跳过两 masks |
+| `tests/test_tb_gae_config.py` | 新增参数、严格 schema、实际 slime YAML 合并和角色测试 |
+| `tests/test_tb_gae_zero_regression.py` | 新增冻结源码对照、Sample/cap/DP/payload、真实 loss/所有 logits 梯度/AdamW 更新，以及完整开启通路 |
+| `tests/test_tb_gae_math.py` | 新增 S3/S4、顺序参考、终止/掩码/cap、奖励和双角色测试 |
+| `tests/test_tb_gae_cp_smoke.py` | 新增实际 CPU Gloo CP=1/4 多进程验收 |
+| `tests/tb_gae_test_utils.py`、`tests/tb_gae_cp_worker.py` | 测试辅助、冻结源码加载和分布式 worker |
+| `tests/fixtures/tb_gae_pre_patch/` | 修改前工作区的 12 份源码快照及 SHA-256，不是从修改后代码生成的期望结果 |
+| `tests/artifacts/tb_gae_20260927/` | 最终 JUnit、JSON 统计、源文件哈希和 309 个受保护脚本/配置的哈希 |
+
+未改动 `Sample` dataclass、原生 `ppo_utils.py`、`cp_utils.py`、`dp_schedule.py`、
+actor/model、现有 shell/YAML 配置、`/sgl-workspace/sglang` 或既有训练运行目录。
+Python 测试均设置 `PYTHONDONTWRITEBYTECODE=1`，避免 import 时写入包目录的 pyc。
+
+## 2. 测试结果与复现
+
+下表时间来自最终 JUnit 各 test case 的累计时间，不包含全部 collection/进程启动开销。
+
+| 套件 | 用例 | 累计秒数 | 通过率 |
+|---|---:|---:|---:|
+| `test_tb_gae_config.py` | 59 | 5.089 | 100% |
+| `test_tb_gae_zero_regression.py` | 23 | 16.454 | 100% |
+| `test_tb_gae_math.py` | 27 | 0.224 | 100% |
+| `test_tb_gae_cp_smoke.py` | 8 | 256.096 | 100% |
+| 既有 Harbor adapter/postprocess、DP、角色、SC 测试 | 84 | 1.009 | 100% |
+| 合计 | **201** | **整套墙钟 285.91** | **100%** |
+
+原始结果：`tests/artifacts/tb_gae_20260927/junit.xml`；结构化统计与实现哈希：`results.json`。
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 CUDA_VISIBLE_DEVICES='' OMP_NUM_THREADS=1 \
+TORCHINDUCTOR_CACHE_DIR=/tmp/tb_gae_inductor \
+python -B -m pytest \
+  tests/test_tb_gae_config.py \
+  tests/test_tb_gae_zero_regression.py \
+  tests/test_tb_gae_math.py \
+  tests/test_tb_gae_cp_smoke.py \
+  tests/test_harbor_atif_adapter.py \
+  tests/test_harbor_sample_postprocess.py \
+  tests/utils/test_megatron_role_config.py \
+  tests/test_dp_schedule.py \
+  tests/test_ppo_sc_args.py \
+  tests/test_ppo_sc_pipeline.py \
+  -o addopts='' -p no:cacheprovider -q \
+  --junitxml=/tmp/tb_gae_final.xml --tb=short
+```
+
+环境：Python 3.12，PyTorch 2.11.0+cu129，pytest 9.0.3；测试设备 CPU，通信 Gloo。
+Black/isort 检查通过；仅检查本次修改业务文件的 `git diff --check` 通过。
+全仓库有原先存在的 docker patch 空白错误，未为此修改无关文件。
+
+额外 CPU probe：262,144 个 action token、S3、终局 reward=0.7，
+返回值最大解析误差 `3.331899642944336e-5 < 1e-4`，约 0.028 秒。
+这是单条 CPU 算子探测，不是 GPU 性能承诺或生产吞吐测量。
+
+## 3. Zero Regression 证据与范围
+
+1. **真实旧源码。** 快照在本次改代码前捕获，包括工作区已有改动。
+   测试先校验 SHA-256，再执行冻结 adapter/postprocessor/GAE dispatcher/loss；
+   原 Ray 方法逐节点 AST 抽取执行，避开构造额外 Ray actor。
+2. **缺省与显式 False。** 两种情况都对照旧源码。测试拦截 TB runtime 模块 import，
+   确保关闭通路不加载算法或 mask helper，不新增 Sample/metadata/train_data/DP masks 键。
+   Sample 序列化往返、hard cap 后内容、DP payload 键值以及 pickle 字节相同。
+3. **原生调用与计算。** spy 确认原 `get_advantages_and_returns_batch` 仍被调用。
+   对固定输入验证 RNG 状态不变，advantages/returns、core policy loss、生产 Harbor policy loss、
+   critic value loss、指标、所有 logits 梯度、AdamW 参数与优化器状态逐字节一致。
+   包含原生 gamma/lambda=1.0 与 0.97、归一化开/关。
+4. **实际 CP 通信。** localhost Gloo CP=1/4 测试对比完整结果和原生切片长度/token 身份，
+   覆盖非整除长度、极短 response、空 local response、S3/S4、all-action/interleaved observation。
+   同一 CP 组还执行冻结旧源码与新关闭路径的 targets、真实 policy/critic loss 和所有 logits 梯度逐字节对比。
+5. **未动原生代码。** `types.py/ppo_utils.py/cp_utils.py/dp_schedule.py` 与快照哈希一致；
+   309 个既有 shell/YAML 文件编辑前后哈希一致。
+
+这些证据说明**被测离线输入和 CPU/Gloo 环境**下的数值/梯度为逐 bit 一致，
+不是未运行过的 GPU/NCCL、多节点在线训练和所有可能输入的数学证明。
+关闭分支只新增 O(1) 布尔判断；没有新增 token 工作、tensor、数据通信或 mask 显存。
+控制面参数解析和分支本身不能被描述为物理意义的零 CPU 指令。
+
+### CP 原生既有边界
+
+增强测试发现：某些极短/有 padding 的样本在 CP rank 0 的 response slice 为空，
+旧 PPO dispatcher 仍做 `k[-1] += reward`，会 IndexError。为保持零回归，本次未修改这段旧行为。
+TB gather/scan/slice 对这些极端样本全部验收；旧/新关闭路径的 loss/梯度对照选择
+原生能够运行的输入（total/response 为 64/1、4096/2048）。这项范围没有被静默掩盖。
+
+## 4. S3/S4 标准配置
+
+**以下是参数格式示例，不是“当前生产全量可直接运行”的承诺。**
+必须先部署第 5 节的 Harbor + Slime 修复并通过实际加载路径检查；当前仅支持自然终止的单 chunk。
+生产课程会遇到 `max_turns`、timeout 或 split 时，仍需要 bootstrap/continuation 工程，
+不能靠本节命令直接覆盖整个生产数据分布。
+不要手工填写一个恒为 terminated 的任务参数来绕过终止验证；该值必须来自实际 agent 环境终止事件。
+
+在独立的角色配置副本顶层写入，不能放在任一角色 `overrides` 下：
+
+```yaml
+# S3
+enable_tb_gae: true
+tb_gae_gamma_turn: 1.0
+tb_gae_lambda_turn: 1.0
+
+megatron:
+  - name: q38-27b-actor
+    role: actor
+    overrides:
+      lr: 5.0e-7
+      min_lr: 5.0e-7
+  - name: q38-27b-critic
+    role: critic
+    overrides:
+      lr: 1.5e-5
+      min_lr: 1.5e-5
+      value_clip: 4.0
+      clip_grad: 100.0
+```
+
+S4 使用相同文件结构，仅将公共参数改成：
+
+```yaml
+enable_tb_gae: true
+tb_gae_gamma_turn: 0.999
+tb_gae_lambda_turn: 0.999
+```
+
+也可把这些键放入现有完整任务配置的副本顶层，任务 YAML 优先于角色公共项。
+通过现有 `MEGATRON_CONFIG_PATH` / `CONFIG_TEMPLATE` 指向副本即可，不需改生产脚本。
+未新建或修改实际生产 YAML；示例仅写在本报告中。
+
+CLI 路径（没有执行；仅在上述支持条件成立后使用）：
+
+```bash
+# S3
+EXTRA_MISC_ARGS="--no-load-optim --no-load-rng --enable-tb-gae --tb-gae-gamma-turn 1.0 --tb-gae-lambda-turn 1.0" \
+  bash examples/harbor_terminal_rl/launch_27b_fresh_base_critic_warmup2.sh
+
+# S4
+EXTRA_MISC_ARGS="--no-load-optim --no-load-rng --enable-tb-gae --tb-gae-gamma-turn 0.999 --tb-gae-lambda-turn 0.999" \
+  bash examples/harbor_terminal_rl/launch_27b_fresh_base_critic_warmup2.sh
+
+# 显式回到原生；覆盖 YAML 中的 true
+EXTRA_MISC_ARGS="--no-load-optim --no-load-rng --no-enable-tb-gae" \
+  bash examples/harbor_terminal_rl/launch_27b_fresh_base_critic_warmup2.sh
+```
+
+不需要 `--custom-advantage-function-path`。保留 `--advantage-estimator ppo`；
+critic 的通用 custom hook 清空规则不变，TB 由其之前的公共开关分支执行。
+S3→S4 仅改两项轮次参数，不同时改 reward/warmup/数据。当前 fresh_base reward 不是本文历史 S2 reward，
+比较时应明确所用基线。
+
+---
+
+## 附：修复前可运行性复核（2026-09-29，审阅者补充，保留历史）
+
+> 以下准确描述本轮修复前的代码。该“生产者为 0”问题现已按第 5 节修复；
+> 截断、跨 chunk、旧运行进程加载旧模块等条件仍需按第 5 节处理。
+
+> 结论：**当前 Harbor 生产链路无法直接启用 TB-GAE。** 按第 4 节的 S3/S4 启动命令拉起，会通过全部
+> 配置校验、正常进入训练，但在**第一次 rollout 转换**时对**每一条 trial** 抛 `ValueError` 而失败。
+> 本报告第 9–13 行的"生产启用边界"已诚实地预告了这一点；下面把它定位到具体代码，并给出修复项。
+
+### 阻塞点：`termination_kind` 无生产者（硬失败，非降级）
+
+1. **消费端会硬失败。** `enable_tb_gae=True` 时，`slime_plugins/harbor/atif_adapter.py:91-95` 调用
+   `trial_termination_kind(result)`，后者在 `slime_plugins/harbor/tb_gae_data.py:16-30` 读取
+   `agent_result.metadata["termination_kind"]`，若不严格等于 `"terminated"` 直接抛
+   `ValueError("TB-GAE requires explicit agent_result.metadata.termination_kind='terminated'…")`。
+   `atif_adapter.py:826-827` 再次强制同一条件。
+
+2. **生产端根本不写这个字段。** 在整个 Harbor 源码树中 `termination_kind` 的**生产者数量为 0**
+   （`grep -rn termination_kind harbor/` 无命中）。Terminus-2 只在
+   `harbor/src/harbor/agents/terminus_2/terminus_2.py:1662` 写入
+   `context.metadata = {"n_episodes", "api_request_times_msec", "summarization_count"}`（外加可选
+   `all_messages`），**没有** `termination_kind`。因此每条 trial 的 metadata 都缺该键。
+
+3. **后果是整轮 rollout 失败。** 生产配置 `harbor_fail_on_conversion_error: true`，转换异常不会被
+   吞掉，会中止该 rollout；不存在"退回原 GAE"的静默降级路径。
+
+4. **离线测试没有覆盖这条真实通路。** `tests/test_tb_gae_math.py:121/139/159` 是**手工注入**
+   `termination_kind="terminated"` 的 fixture，甚至专门断言"缺失时应抛错"（:139-140）。所以
+   "201/201 通过"证明的是"代码在给定契约时正确、在缺契约时正确报错"，**不**证明"接上真实
+   Harbor 数据即可端到端跑通"。报告第 3 节（"被测离线输入…不是…所有可能输入的数学证明"）已限定了
+   这一范围，但第 4 节的 S3/S4 启动命令看起来可直接运行，容易造成"配置校验通过=可训练"的误判。
+
+### 与 SC 的本质差别（为何 SC 可跑而 TB-GAE 不可）
+
+SC 的上游契约是 **top-k logprobs**，即向 SGLang 请求 `top_logprobs_num=k`（`slime_plugins/harbor/llm.py:135-150`），
+这是引擎**原生能力**且已在 2026-09-26 真实 GPU 冒烟中验证。TB-GAE 的上游契约是
+`metadata.termination_kind`，是一个**目前无人写入**的字段。差别不在算法实现，而在数据契约能否被现有栈满足。
+
+### 使其可运行所需的最小修复（三选一，按推荐排序）
+
+- **（推荐）在真实终止事件处补生产者。** 由 Terminus-2/adapter 依据 agent 实际结束原因写入
+  `context.metadata["termination_kind"]`：仅当轨迹是**自然完成/环境判定 done**（非达到 `max_turns`
+  截断、非异常/取消）时才置 `"terminated"`；截断或未完成置其它值（如 `"truncated"`）。注意本报告
+  第 116 行的告诫——该值**必须来自真实终止事件**，不能填一个"恒为 terminated"的常量绕过校验，否则
+  会把被截断的困难轨迹当作真实终止来 bootstrap，污染优势估计。
+- **实现 bootstrap 协议。** 第 12 行提到的"外部截断 bootstrap"尚未开放；实现后即可正确处理
+  非终止尾部，而不必要求每条轨迹都自然终止。
+- **暂缓 TB-GAE，先跑 SC。** SC 已具备可运行条件（见同目录 `SC_IMPLEMENTATION_REPORT_20260929.md`
+  与新增的 `examples/harbor_terminal_rl/launch_27b_run2_warmcritic_sc.sh`）。
+
+### 其它次要观察
+
+- **单 chunk 限制**：`tb_gae_data.py:61-63` 要求 `is_last_chunk=True` 且单块；`trajectory_retokenized`
+  下若一条 trial 因超长被切成多 chunk（本模型 256k + 229376 压缩阈值下可能发生），同样会抛
+  "requires a complete terminated single chunk"。启用前需确认目标任务在 max_turns 课程较大时不会触发多 chunk。
+- **子 agent**：`atif_adapter.py` 在 `include_subagents=True` 时对 TB-GAE 直接报错；需确保
+  `harbor_include_subagent_rollouts=false`（当前默认满足）。
+- **配置校验本身无误**：`validate_tb_gae_config`（`slime/utils/tb_gae_config.py:109-144`）对生产 argv
+  （S3：ppo/thd/CP4/kl0/retokenized…）实测**通过**。问题不在校验，而在校验之后的运行期数据契约。
+
+## 5. 2026-09-29：真实终止契约修复与 smoke 闭环
+
+### 5.1 根因确认与结论
+
+审阅者指出的“只测了手工字段 fixture”问题成立。本轮先用冻结的旧 Terminus-2
+实际运行两次 task_complete，得到真实 AgentContext；开启 TB 的 adapter 仍因
+`kind=None` 报错，**不依赖手工造缺字段样本复现**。
+
+生产启动链默认 `HARBOR_SRC=/path/to/workspace/harbor/src`，
+任务 agent 为 `slime_plugins.harbor.agent:SlimeTerminus2`，
+其基类实际加载文件是：
+
+```text
+/path/to/workspace/harbor/src/harbor/agents/terminus_2/terminus_2.py
+```
+
+本轮在共享源码与本地 Harbor 环境中验证了该继承/导入关系；没有进入正在运行的 Ray worker
+替换模块，也没有声称所有节点已热更新。**已启动进程可能仍持有旧类定义，须重建 worker 后使用。**
+
+另一个精确性修正：adapter 中的此异常是普通 `ValueError`，
+而 `_run_one_trial` 的对应 catch 只捕获 `RolloutConversionError`。
+因此不是把 `harbor_fail_on_conversion_error` 改为 false 就能降级。
+外层 trial-error 策略还可能决定失败统计/重试，但没有把 TB 静默改成原生 GAE 的通路。
+
+**本轮完成的是缺失生产者和远程评测隔离，不是完整截断 bootstrap。**
+自然结束的主 agent、单 chunk 可以生成正确 masks 并运行 S3/S4；
+真实截断仍明确报错，不能保证当前生产课程的每个 rollout 都可完成。
+
+### 5.2 实际代码修改
+
+| 文件 | 修改 |
+|---|---|
+| `../harbor/src/harbor/agents/terminus_2/terminus_2.py` | 新增版本标记 `TERMINATION_METADATA_VERSION=1`、keyword-only `record_termination_metadata=False`、真实退出事件记录；外层 run 在 finally 中输出原因 |
+| `slime_plugins/harbor/tb_gae_termination.py`（新） | 校验实际 agent 类型与实际加载的 Harbor 协议/构造函数；只在 TB 训练时注入生产者开关，旧包在 Trial.create 前失败并显示源码路径 |
+| `slime_plugins/harbor/rollout.py` | `_set_default_agent_config` True 且非 eval 才启用生产者；eval args 显式关 TB；远程 eval 传递 False 覆盖 |
+| `slime_plugins/harbor/trial_worker.py` | 允许并严格校验 eval 的 `enable_tb_gae=False` 覆盖，使用 args 副本，不污染训练配置 |
+| `slime_plugins/harbor/tb_gae_data.py` | 拒绝非终止的语义不变；错误信息增加实际 kind/reason 和生产者缺失的修复提示 |
+| `tests/test_tb_gae_termination_smoke.py`（新） | 真实 run/Chat/parser、Factory/Trial 执行、截断/取消、旧版失败、off 对照、远程 eval 全链分派测试 |
+| `tests/fixtures/tb_gae_termination_pre_patch/` | 本轮修改前源码与哈希；用于真实旧 agent 对照 |
+| `tests/artifacts/tb_gae_termination_20260929/` | 三份 JUnit、JSON 结果、源码哈希、可审阅的跨仓库 `implementation.patch` |
+
+`../harbor` 不在 slime 的 Git 工作树中，因此**只交付 slime diff 会漏掉最重要的生产者补丁**。
+本轮实际修改的是上表共享 Harbor 文件；跨仓库 patch 同时收录两个目录的改动，
+用于审阅/迁移到其它部署路径，当前工作区无需重复应用。
+
+#### 事件语义
+
+| 真实执行分支 | kind | reason | 是否可进入当前 TB 训练 |
+|---|---|---|---|
+| Terminus-2 第二次确认 task_complete，进入原有自然 return | terminated | task_complete_confirmed | 是，仍需单 chunk |
+| 用完循环次数，未进入确认完成 return | truncated | max_turns | 否，缺后继 bootstrap |
+| 会话提前消失 | truncated | session_ended | 否 |
+| asyncio 取消 | truncated | cancelled | 否 |
+| TimeoutError | truncated | timeout | 否 |
+| 未恢复的 context/output 长度异常 | truncated | context_length / output_length | 否 |
+| 其它异常 | error | agent_exception | 否，原异常继续抛出 |
+
+Terminus-2 的完成语义来自已有“两次确认”的控制流程，不是 verifier 成功判断：
+**agent 自然结束而 verifier reward=0 仍是 terminated**，不会只让成功轨迹通过。
+恰好在最后允许轮次完成第二次确认时，terminated 优先；
+仅第一次宣称完成即达到 max_turns 时仍为 truncated。
+普通工具调用的 stop/EOS 不生成 terminated。
+
+关键实现与实际代码一致：
+
+```python
+# Terminus2._run_agent_loop：原有自然完成 return 分支
+if is_task_complete:
+    if was_pending_completion:
+        self._record_termination("terminated", "task_complete_confirmed")
+        return
+
+# for episode in range(self._max_episodes) 正常耗尽后
+self._record_termination("truncated", "max_turns")
+```
+
+只有 `record_termination_metadata is True` 时 `_record_termination` 才创建状态字段。
+旧 run 主体保存在 `_run_without_termination_tracking`，关闭时直接执行原主体，
+不输出 termination metadata。开启时每次 run 开始先重置状态，包住原主体的异常/取消，
+在原 metrics finally **之后**写 metadata，避免被原 `context.metadata = {...}` 覆盖。
+异常包括初始 terminal I/O 和 skills 获取阶段，不仅覆盖 agent loop。
+测试验证重复使用 agent 实例不会把上次 terminated 泄漏到本次截断。
+
+实际 Harbor `Trial._execute_agent` 用 `asyncio.wait_for`：
+超时先向 agent 注入 CancelledError，因此 agent 记录 `truncated/cancelled`；
+Trial 随后抛 AgentTimeoutError。二者不冲突，也不会误记为真实终止。
+
+#### 门控与版本校验
+
+无需用户另行加 agent kwargs。正常 TB 开关解析后：
+
+```python
+# rollout.py::_set_default_agent_config
+if getattr(args, "enable_tb_gae", False) is True and not _is_eval_args(args):
+    from slime_plugins.harbor.tb_gae_termination import configure_termination_producer
+    configure_termination_producer(agent)
+```
+
+helper 要求实际 `SlimeTerminus2` 的基类声明 v1，
+并且构造函数显式接受 `record_termination_metadata`；
+验证成功才设置 `agent["kwargs"]["record_termination_metadata"] = True`。
+禁止 `agent.name` 覆盖 import_path 或冲突的 false；不会让旧 Harbor 的 `**kwargs`
+悄悄吞掉一个它不认识的参数。版本检查发生在 trial config 构造期间，
+**早于 Trial.create 和环境分配**，但不是模型训练 driver argparse 阶段。
+
+TB 关闭/缺省不调用该 helper。远程 eval 额外发送 `enable_tb_gae=False`，
+避免已有 TrialWorker 持有训练 args 导致 eval 误走 TB 转换；
+SC-only 评测覆盖格式保持兼容。
+
+### 5.3 本轮测试结果（不混用 9 月 27 日结果）
+
+| 套件 | 结果 | 本次命令墙钟 |
+|---|---:|---:|
+| 新增真实终止 smoke | 36/36 | 与下两项一起 4.40 秒 |
+| 既有 Harbor adapter | 18/18 | 同上 |
+| 既有 sample postprocess | 2/2 | 同上 |
+| TB 数学测试的无 Megatron 部分 | 16/16，另 11 项未选择 | 0.20 秒 |
+| Harbor 原有 Terminus-2 / tmux 单测 | 20/20 | 3.94 秒 |
+| **本轮合计执行** | **92 通过，0 失败，0 跳过** | 三条命令如上 |
+
+新增 smoke 的重要覆盖：
+
+- 真实 `SlimeTerminus2.run → _run_agent_loop → Chat.chat → JSON parser` 生成 AgentContext，
+  经过实际 JSON 序列化后进入真实 adapter、hard cap、`compute_tb_gae`；
+  S3/S4 与 reward=0/0.7 均通过，未向 metadata 手工塞 terminated。
+- 真实 AgentFactory 根据生成的 AgentConfig 创建 agent，
+  执行真实 `Trial._execute_agent`，覆盖正常完成和 wait_for 超时。
+  Trial 的环境对象、外部模型/终端 I/O 是替身，不创建 Daytona 容器。
+- max_turns 未完成、只确认一次、撤销完成、会话丢失、
+  setup/loop 阶段异常与取消、真实 wait_for 取消、实例复用。
+- 缺省/False 与冻结旧 Terminus-2 的实际 AgentContext 和 Sample 字典相同，
+  覆盖自然结束和轮次耗尽；没有新增 termination 实例状态/metadata。
+- 真实配置函数、eval coordinator、远程分派和 TrialWorker 方法的 AST 提取执行：
+  验证生产者开关/旧版失败/评测覆盖；仅替换 Ray 传输和日志。
+  这是本地函数执行，**不等价于真实 Ray 集群验收**。
+
+本轮环境是 Harbor 的 Python **3.13.13**、PyTorch **2.10.0+cu128**、pytest **9.0.2**；
+默认系统 Python 缺少 Harbor 依赖，该 Harbor venv 缺 Ray/Megatron。
+因此本轮**未重新运行** 9 月 27 日完整 201 项、CPU CP=4、GPU/NCCL 或生产在线训练；
+算法/CP/GAE loss 文件未在本轮修改。不能把本轮 92 项称为完整训练已通过。
+
+Ruff 对修改文件的 check/format 通过；Harbor 全项目
+`uv run --no-sync ty check --extra-search-path packages/rewardkit/src` 通过。
+不带 extra-search-path 的默认 ty 命令有 rewardkit 导入路径诊断，补路径后通过；
+未为此更改业务包或环境。为保护既有代码，仅格式化本次文件，未运行会重写全仓库的格式化命令。
+311 个既有 shell/YAML 哈希不变；未修改 SGLang 或既有训练目录。
+
+### 5.4 如何验证部署并启用
+
+1. **同时部署 Harbor 与 Slime 侧补丁。** 当前共享路径已修改；
+   若另一个 job 用其它 `HARBOR_SRC`、容器内安装包或已加载旧模块的 worker，
+   必须把同一生产者补丁部署到实际路径，并重建该 job 的 worker。
+   不需要重启/修改 SGLang 引擎源码，本次也没有操作运行中的 job。
+
+2. 在**将用于训练的同一解释器与 PYTHONPATH**下运行无模型、无容器的预检，
+   不要只 grep 某个未被使用的 Harbor 目录：
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 LITELLM_LOCAL_MODEL_COST_MAP=True \
+python -B - <<'PY'
+import inspect
+from slime_plugins.harbor.agent import SlimeTerminus2
+from slime_plugins.harbor.tb_gae_termination import configure_termination_producer
+
+agent = {
+    "import_path": "slime_plugins.harbor.agent:SlimeTerminus2",
+    "kwargs": {"collect_rollout_details": True},
+}
+configure_termination_producer(agent)
+print("loaded loop:", inspect.getfile(SlimeTerminus2._run_agent_loop))
+print("protocol:", SlimeTerminus2.TERMINATION_METADATA_VERSION)
+print("tracking:", agent["kwargs"]["record_termination_metadata"])
+PY
+```
+
+预期输出协议 1、tracking True，并显示实际 patched Harbor 文件。
+**此预检只证明生产者支持，不证明所有样本都是自然终止。**
+
+3. 可复现本次 smoke（绝对路径对应本工作区；仅外部 I/O 替身）：
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 CUDA_VISIBLE_DEVICES='' OMP_NUM_THREADS=1 \
+LITELLM_LOCAL_MODEL_COST_MAP=True \
+PYTHONPATH=/path/to/workspace/harbor/src:/path/to/workspace/slime-terminal-RL \
+/path/to/workspace/harbor/.venv/bin/python -B -m pytest \
+  tests/test_tb_gae_termination_smoke.py \
+  tests/test_harbor_atif_adapter.py tests/test_harbor_sample_postprocess.py \
+  -o addopts='' -p no:cacheprovider -q --tb=short
+```
+
+4. 第 4 节 S3/S4 参数保持不变，`record_termination_metadata` 自动联动，
+   **不要手填 `termination_kind: terminated`**。
+   若原始 agent 自然终止、单 chunk，已消除本次报告定位的缺字段阻断；
+   若实际数据出现 `kind='truncated', reason='max_turns'`，那是新的正确诊断，
+   不是生产者又失效。eval 已单独关闭 TB，不受该训练限制。
+
+### 5.5 尚未解决的生产全量条件及正确后续方案
+
+当前 fresh_base 课程包含 max_turns、时间墙、上下文压缩；
+**仅补生产者不会自动让这种混合数据整轮可训练**。本轮未选择丢弃截断样本，
+也未把它们视为真实 done，更未静默回退原生算法。
+
+要支持这类数据，后续应另行完成并验收：
+
+- **外部截断后继状态 value**：保存真实后继 observation/state 及对应 tokenizer 上下文，
+  用同一份 old critic 前向得到 `bootstrap_values`，贯穿 adapter/DP/CP 到 TB 入口。
+  当前数学核心接受显式 bootstrap/continuation，但公共入口与数据协议尚未实现这些值的生产。
+  不能拿最后 action 的旧 value 冒充它之后状态的 value，不能默认 0。
+- **跨 chunk continuation**：保留 episode/chunk 顺序，跨 DP 交换边界信息，
+  从后向前传递下一 chunk 的 value/advantage；terminal outcome 在整 episode 只放一次。
+- 同时制定 timeout、任务预算与有限时域目标的清晰语义；
+  如果未来把 max_turns 定义成任务本身的 terminal horizon，属于目标函数变更，
+  不能作为这次 bugfix 悄悄带入。
+- 用真实截断/多 chunk replay、CP=4 和 actor/critic 一致性做独立验收后，
+  才把“支持自然终止子集”升级为“支持当前生产全量”。
+
+本轮交付的直接结论：**报告中的无生产者死结已修复并有真实 agent smoke 证据；
+全量截断/多 chunk 训练仍有明确、未被掩盖的工程边界。**
+
+---
+
+## 附：二次复核结论（2026-09-29，审阅者，针对"现在能否启动生产训练"）
+
+对照实际源码逐条复核本轮修复，结论：**生产者死结确已修复，但当前 mixed3000 生产训练仍不能启用。**
+
+**已验证为真（生产者修复是实的，不是纸面）：**
+- `harbor/.../terminus_2.py:73` 有 `TERMINATION_METADATA_VERSION=1`；`:177` 构造函数接受
+  `record_termination_metadata`；`:1582-1646` 的 `_record_termination` + `run()` 外层 finally
+  在原 `context.metadata = {...}`（`:1724`，位于 `_run_without_termination_tracking` 的 finally）
+  **之后**合并写入 `termination_kind`，顺序正确，不会被覆盖。
+- `slime_plugins/harbor/tb_gae_termination.py` 存在；`rollout.py:1538-1540` 在 TB 开启且非 eval 时
+  调用 `configure_termination_producer(agent)` 注入开关。链路完整。
+
+**仍然致命（针对本工作负载）——截断轨迹会被成批丢弃：**
+- 事件语义（本报告 5.2 表）：只有 `task_complete` 二次确认的自然结束才记 `terminated`；
+  `max_turns`/`timeout`/`cancelled`/`context_length` 一律记 `truncated`。
+- `tb_gae_data.py::trial_termination_kind` 对 `!= "terminated"` 抛**普通 `ValueError`**；
+  `rollout.py:1293-1308` 的 `except` 只接 `RolloutConversionError`，**接不住这个 ValueError**
+  （故 `harbor_fail_on_conversion_error=false` 无效）。它上抛到 `rollout.py:816-827` 的
+  通用 `except Exception`：因生产 `harbor_fail_on_trial_error: false`，该样本被 **`stats["failed"]++`
+  后丢弃**（`harbor_retry_missing_samples: 0`，不重试）。
+- 量级：本仓库 yaml 注释自证 run#2 **76.6% 轨迹撞到 max_turns 上限**。TB 开启后这批（占多数的）
+  截断轨迹会被整批丢掉，剩下的是"能自然做完的简单任务"——既浪费大量 rollout 算力，又让 batch
+  产生严重幸存者偏差，且与 max_turns 课程（本就是为长时域难任务设计）的目的直接冲突。
+  换言之：不是崩溃，而是**训练不可用**。
+
+**因此：**
+- 生产全量（mixed3000 / 256k / 课程 max_turns）：**暂不启动**。需先实现截断/多 chunk 的
+  bootstrap（本报告 6/7 节所列），或迁到"绝大多数轨迹能在 max_turns 内自然终止"的任务/配置域。
+- 端到端冒烟（少量能自然做完的简单任务）：可以起，用于验证真实数据下的 masks/优势正确性——
+  这也正是本轮 smoke 已覆盖的范围。
+- 因上述原因，审阅者**未**提供 TB-GAE 的生产启动脚本；SC 的生产启动脚本
+  `examples/harbor_terminal_rl/launch_27b_run2_warmcritic_sc.sh` 不受此限制，可用。

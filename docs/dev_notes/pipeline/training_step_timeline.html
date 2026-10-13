@@ -1,0 +1,720 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>一个训练 Step 的完整时序 · Agentic RL with PPO</title>
+<style>
+:root{
+  --bg:#eaf2fb;          /* 淡蓝底色 */
+  --bg2:#dfeaf7;
+  --panel:#ffffff;
+  --panel2:#f1f7fd;
+  --border:#c3d5e8;
+  --border2:#d7e4f1;
+  --txt:#1d2f42;
+  --dim:#587490;
+  --dim2:#6b869f;
+  --orch:#c2185b;        /* orchestrator  */
+  --rollout:#2e7d32;     /* rollout       */
+  --env:#00838f;         /* environment   */
+  --engine:#558b2f;      /* inference engine */
+  --data:#a86a00;        /* experience batch */
+  --critic:#6a3fb5;      /* critic V_phi  */
+  --actor:#1565c0;       /* actor pi_theta*/
+  --sync:#c62828;        /* weight sync   */
+  --accent:#0d47a1;
+  --hl:#8a5200;
+  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth}
+body{background:var(--bg);color:var(--txt);
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+  line-height:1.68;font-size:14.5px;padding-bottom:70px}
+header{padding:26px 34px 20px;border-bottom:1px solid var(--border);
+  background:radial-gradient(1100px 300px at 18% -40%,rgba(21,101,192,.13),transparent),
+             linear-gradient(180deg,#f7fbff,#e4eef9)}
+h1{font-size:25px;font-weight:750;color:#14263a}
+h1 .tag{font-size:13px;color:var(--dim);font-weight:400;margin-left:12px}
+.sub{color:#41607d;font-size:13.5px;margin-top:9px;max-width:1080px}
+main{max-width:1400px;margin:0 auto;padding:0 34px}
+section{padding:34px 0 12px;border-bottom:1px solid var(--border)}
+section:last-child{border-bottom:none}
+h2{font-size:20px;font-weight:700;display:flex;align-items:center;gap:11px;margin-bottom:6px;color:#14263a}
+h2 .num{font-family:var(--mono);font-size:12px;color:#fff;background:var(--accent);border-radius:6px;padding:2px 9px;font-weight:700}
+h3{font-size:15.5px;font-weight:650;margin:24px 0 10px;display:flex;align-items:center;gap:8px;color:#14263a}
+h3::before{content:"";width:4px;height:15px;background:var(--accent);border-radius:2px}
+p{margin:9px 0;color:#33506c}
+.lead{color:var(--dim);font-size:13.5px;margin-bottom:16px;max-width:1080px}
+b{color:#0f2233;font-weight:680}
+em{color:var(--accent);font-style:normal}
+.term{font-family:var(--mono);font-size:12.5px;background:#e8f1fb;border:1px solid #bed4ea;
+  padding:1px 6px;border-radius:4px;color:#124a86}
+.svgwrap{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:12px;margin:16px 0;
+  overflow-x:auto;box-shadow:0 1px 3px rgba(30,70,110,.07)}
+svg{max-width:100%;height:auto;display:block}
+.legend{display:flex;gap:16px;flex-wrap:wrap;margin-top:14px;font-size:12px;color:var(--dim)}
+.legend span{display:inline-flex;align-items:center;gap:6px}
+.dot{width:11px;height:11px;border-radius:3px;display:inline-block}
+.card{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:16px 18px;margin:12px 0;
+  box-shadow:0 1px 3px rgba(30,70,110,.06)}
+.card.tight{padding:13px 15px}
+.grid{display:grid;gap:12px}
+.g2{grid-template-columns:repeat(2,1fr)}
+.g3{grid-template-columns:repeat(3,1fr)}
+@media(max-width:1020px){.g2,.g3{grid-template-columns:1fr}}
+.note{border-left:3px solid var(--data);background:#fdf6e8;border-radius:0 10px 10px 0;
+  padding:12px 16px;margin:13px 0;font-size:13px;color:#6b4a08}
+.warn{border-left:3px solid var(--sync);background:#fdedec;border-radius:0 10px 10px 0;
+  padding:12px 16px;margin:13px 0;font-size:13px;color:#8d2020}
+.ok{border-left:3px solid var(--rollout);background:#ecf7ed;border-radius:0 10px 10px 0;
+  padding:12px 16px;margin:13px 0;font-size:13px;color:#245c28}
+.note b,.warn b,.ok b{color:#14263a}
+table{width:100%;border-collapse:collapse;font-size:12.5px}
+th,td{text-align:left;padding:8px 11px;border-bottom:1px solid var(--border2);vertical-align:top}
+th{color:var(--dim);font-weight:650;font-size:11.5px;text-transform:uppercase;letter-spacing:.5px;background:#e9f1fa}
+td{color:#33506c}
+tr:hover td{background:#f3f8fd}
+.tblwrap{overflow-x:auto;border:1px solid var(--border);border-radius:10px;margin:14px 0;background:var(--panel)}
+.fml{background:#f4f9fe;border:1px solid #c9dcee;border-radius:10px;padding:15px 18px;margin:12px 0;
+  font-family:var(--mono);font-size:13.5px;line-height:2.05;color:#1d3348}
+.fml .lbl{color:var(--dim2);font-size:11.5px;margin-left:14px}
+.fml .hl{color:#a8480d;font-weight:650}
+.stage{border:1.5px solid var(--border);border-left:5px solid var(--c);border-radius:11px;
+  background:var(--panel);padding:15px 18px;margin:12px 0;box-shadow:0 1px 3px rgba(30,70,110,.06)}
+.stage .sh{display:flex;align-items:center;gap:11px;font-weight:700;font-size:15.5px;color:#14263a}
+.stage .sh .n{font-family:var(--mono);font-size:12px;background:var(--c);color:#fff;padding:2px 9px;border-radius:6px}
+.stage .sh .badge{margin-left:auto;font-size:10.5px;font-weight:700;padding:2px 10px;border-radius:20px;
+  border:1px solid var(--c);color:var(--c)}
+.stage ul{margin:10px 0 0 19px;font-size:13px;color:#33506c}
+.stage li{margin:5px 0}
+.io{display:flex;gap:10px;flex-wrap:wrap;margin-top:11px;font-size:11.5px;font-family:var(--mono)}
+.io div{border:1px solid var(--border);border-radius:7px;padding:5px 10px;background:var(--panel2)}
+.io .in{border-color:#a9d3ad;background:#eef8ef;color:#245c28}
+.io .out{border-color:#a9c6e8;background:#eaf2fc;color:#12457e}
+footer{max-width:1400px;margin:0 auto;padding:28px 34px;color:var(--dim2);font-size:12px}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>一个训练 Step 的完整时序<span class="tag">Agentic RL · PPO · 122B MoE policy + 122B critic</span></h1>
+  <p class="sub">
+    这张图回答一个问题：<b>当训练跑起来之后，一个 step 里到底按什么顺序发生了什么。</b>
+    横轴是时间，纵轴是参与的功能模块。全篇只用训练流程与强化学习的标准术语
+    （policy / critic / advantage / GAE / clipped surrogate / KV cache / DP·TP·PP·CP·EP 等），
+    不涉及任何实现细节。
+  </p>
+  <div class="legend">
+    <span><i class="dot" style="background:var(--orch)"></i>训练编排器 Orchestrator</span>
+    <span><i class="dot" style="background:var(--rollout)"></i>轨迹采集 Rollout</span>
+    <span><i class="dot" style="background:var(--env)"></i>环境 Environment</span>
+    <span><i class="dot" style="background:var(--data)"></i>经验批次 Experience Batch</span>
+    <span><i class="dot" style="background:var(--critic)"></i>Critic V<sub>φ</sub></span>
+    <span><i class="dot" style="background:var(--actor)"></i>Actor π<sub>θ</sub></span>
+    <span><i class="dot" style="background:var(--sync)"></i>权重同步 Weight Sync</span>
+  </div>
+</header>
+
+<main>
+
+<section>
+<h2><span class="num">1</span>全景时序图</h2>
+<p class="lead">
+  五个阶段 <b>A → E</b> 在一个 step 内依次发生。唯一的例外是右上方虚线框：
+  <b>下一个 step 的轨迹采集提前启动，与本 step 的模型更新在时间上完全重叠</b>——这是整条流水线最重要的结构特征。
+</p>
+
+<div class="svgwrap">
+<svg viewBox="0 0 1320 760" xmlns="http://www.w3.org/2000/svg" font-family="ui-monospace,monospace">
+  <defs>
+    <marker id="ab" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="#0d47a1"/></marker>
+    <marker id="ag" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="#2e7d32"/></marker>
+    <marker id="ac" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="#6a3fb5"/></marker>
+    <marker id="ar" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="#c62828"/></marker>
+    <marker id="ay" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="#a86a00"/></marker>
+    <marker id="ae" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="#00838f"/></marker>
+  </defs>
+
+  <!-- phase headers -->
+  <g font-size="11" text-anchor="middle" font-weight="700">
+    <rect x="212" y="6" width="286" height="24" rx="6" fill="rgba(46,125,50,.12)" stroke="#2e7d32"/>
+    <text x="355" y="22" fill="#2e7d32">A · 轨迹采集 ROLLOUT</text>
+    <rect x="504" y="6" width="170" height="24" rx="6" fill="rgba(168,106,0,.12)" stroke="#a86a00"/>
+    <text x="589" y="22" fill="#a86a00">B · 经验批次构建</text>
+    <rect x="680" y="6" width="216" height="24" rx="6" fill="rgba(106,63,181,.12)" stroke="#6a3fb5"/>
+    <text x="788" y="22" fill="#6a3fb5">C · CRITIC 更新</text>
+    <rect x="902" y="6" width="252" height="24" rx="6" fill="rgba(21,101,192,.12)" stroke="#1565c0"/>
+    <text x="1028" y="22" fill="#1565c0">D · ACTOR 更新</text>
+    <rect x="1160" y="6" width="150" height="24" rx="6" fill="rgba(198,40,40,.11)" stroke="#c62828"/>
+    <text x="1235" y="22" fill="#c62828">E · 权重同步</text>
+  </g>
+
+  <!-- lane labels -->
+  <g font-size="11.5" font-weight="700">
+    <rect x="0" y="40" width="204" height="54" rx="7" fill="#f1f7fd" stroke="#c2185b"/>
+    <text x="13" y="61" fill="#c2185b">训练编排器</text>
+    <text x="13" y="79" fill="#587490" font-size="9.5" font-weight="400">Orchestrator / 主循环</text>
+
+    <rect x="0" y="102" width="204" height="54" rx="7" fill="#f1f7fd" stroke="#2e7d32"/>
+    <text x="13" y="123" fill="#2e7d32">轨迹采集调度</text>
+    <text x="13" y="141" fill="#587490" font-size="9.5" font-weight="400">Rollout Scheduler</text>
+
+    <rect x="0" y="164" width="204" height="54" rx="7" fill="#f1f7fd" stroke="#00838f"/>
+    <text x="13" y="185" fill="#00838f">环境 Environment</text>
+    <text x="13" y="203" fill="#587490" font-size="9.5" font-weight="400">隔离终端沙箱 × 280</text>
+
+    <rect x="0" y="226" width="204" height="54" rx="7" fill="#f1f7fd" stroke="#558b2f"/>
+    <text x="13" y="247" fill="#558b2f">推理引擎</text>
+    <text x="13" y="265" fill="#587490" font-size="9.5" font-weight="400">Behaviour policy π_old</text>
+
+    <rect x="0" y="288" width="204" height="54" rx="7" fill="#f1f7fd" stroke="#a86a00"/>
+    <text x="13" y="309" fill="#a86a00">经验批次</text>
+    <text x="13" y="327" fill="#587490" font-size="9.5" font-weight="400">Experience Batch</text>
+
+    <rect x="0" y="350" width="204" height="54" rx="7" fill="#f1f7fd" stroke="#6a3fb5"/>
+    <text x="13" y="371" fill="#6a3fb5">CRITIC  V_φ</text>
+    <text x="13" y="389" fill="#587490" font-size="9.5" font-weight="400">价值网络（与 Actor 同规模）</text>
+
+    <rect x="0" y="412" width="204" height="54" rx="7" fill="#f1f7fd" stroke="#1565c0"/>
+    <text x="13" y="433" fill="#1565c0">ACTOR  π_θ</text>
+    <text x="13" y="451" fill="#587490" font-size="9.5" font-weight="400">策略网络（待优化目标）</text>
+  </g>
+
+  <!-- lane guide lines -->
+  <g stroke="#c3d5e8" stroke-width="1" stroke-dasharray="3 5">
+    <line x1="210" y1="67"  x2="1312" y2="67"/>
+    <line x1="210" y1="129" x2="1312" y2="129"/>
+    <line x1="210" y1="191" x2="1312" y2="191"/>
+    <line x1="210" y1="253" x2="1312" y2="253"/>
+    <line x1="210" y1="315" x2="1312" y2="315"/>
+    <line x1="210" y1="377" x2="1312" y2="377"/>
+    <line x1="210" y1="439" x2="1312" y2="439"/>
+  </g>
+
+  <!-- ============ A · ROLLOUT ============ -->
+  <rect x="214" y="44" width="282" height="46" rx="6" fill="#fdeaf2" stroke="#c2185b"/>
+  <text x="223" y="62" fill="#c2185b" font-size="10.5" font-weight="700">发起本 step 的轨迹采集</text>
+  <text x="223" y="79" fill="#587490" font-size="9.5">目标：256 条完整轨迹（1 prompt = 1 轨迹，n = 1）</text>
+
+  <rect x="214" y="106" width="282" height="46" rx="6" fill="#e8f5e9" stroke="#2e7d32"/>
+  <text x="223" y="124" fill="#2e7d32" font-size="10.5" font-weight="700">过采样 280 · 并发调度</text>
+  <text x="223" y="141" fill="#587490" font-size="9.5">从任务池取 280 个 prompt，全部并发投放</text>
+
+  <rect x="214" y="168" width="282" height="46" rx="6" fill="#e0f2f4" stroke="#00838f"/>
+  <text x="223" y="186" fill="#00838f" font-size="10.5" font-weight="700">Agent–Environment 交互循环</text>
+  <text x="223" y="203" fill="#587490" font-size="9.5">≤ 60 turn：观测 → 决策 → 动作 → 新观测</text>
+
+  <rect x="214" y="230" width="282" height="46" rx="6" fill="#eff7ea" stroke="#558b2f"/>
+  <text x="223" y="248" fill="#558b2f" font-size="10.5" font-weight="700">策略推理（每 turn 一次）</text>
+  <text x="223" y="265" fill="#587490" font-size="9.5">返回 action tokens + per-token log π_old</text>
+
+  <!-- interaction loop arrows -->
+  <g stroke-width="1.6">
+    <path d="M330,216 L330,228" stroke="#00838f" marker-end="url(#ae)"/>
+    <path d="M395,228 L395,216" stroke="#558b2f" marker-end="url(#ag)"/>
+  </g>
+  <text x="404" y="224" fill="#587490" font-size="8.5">turn 循环</text>
+
+  <!-- reward -->
+  <rect x="214" y="290" width="282" height="42" rx="6" fill="#fdf5e4" stroke="#a86a00"/>
+  <text x="223" y="307" fill="#a86a00" font-size="10.5" font-weight="700">终局奖励 r ∈ {0, 1}</text>
+  <text x="223" y="324" fill="#587490" font-size="9.5">环境内运行验证测试 → 稀疏、可验证的结果奖励</text>
+  <path d="M355,278 L355,288" stroke="#a86a00" stroke-width="1.6" marker-end="url(#ay)"/>
+
+  <text x="502" y="186" fill="#8a5200" font-size="9.5">✂ 先到的 256 条</text>
+  <text x="502" y="200" fill="#8a5200" font-size="9.5">收下，丢弃慢尾</text>
+
+  <!-- ============ B · BATCH BUILD ============ -->
+  <rect x="508" y="290" width="162" height="42" rx="6" fill="#fdf5e4" stroke="#a86a00"/>
+  <text x="516" y="307" fill="#a86a00" font-size="10" font-weight="700">序列化 + 上下文截断</text>
+  <text x="516" y="324" fill="#587490" font-size="9">token 序列 · loss mask · 轨迹分组</text>
+
+  <rect x="508" y="106" width="162" height="46" rx="6" fill="#fdf5e4" stroke="#a86a00"/>
+  <text x="516" y="124" fill="#a86a00" font-size="10" font-weight="700">DP 分片 + 微批装箱</text>
+  <text x="516" y="141" fill="#587490" font-size="9">按序列长度均衡，同轨迹不跨 step</text>
+  <path d="M589,288 L589,155" stroke="#a86a00" stroke-width="1.6" marker-end="url(#ay)"/>
+
+  <rect x="508" y="44" width="162" height="46" rx="6" fill="#fdeaf2" stroke="#c2185b"/>
+  <text x="516" y="62" fill="#c2185b" font-size="10" font-weight="700">本 step 经验就绪</text>
+  <text x="516" y="79" fill="#587490" font-size="9">交付给训练侧（每个 DP rank 一份）</text>
+  <path d="M655,104 C672,96 672,84 672,72" stroke="#a86a00" stroke-width="1.5" fill="none" marker-end="url(#ay)"/>
+
+  <!-- ============ overlap banner ============ -->
+  <rect x="684" y="102" width="626" height="40" rx="7" fill="rgba(46,125,50,.09)" stroke="#2e7d32" stroke-dasharray="5 4"/>
+  <text x="997" y="120" fill="#2e7d32" font-size="10.5" font-weight="700" text-anchor="middle">★ 下一个 step 的轨迹采集在此刻已经启动</text>
+  <text x="997" y="135" fill="#587490" font-size="9.5" text-anchor="middle">与下方的 Critic / Actor 更新完全并行 —— 采集耗时被模型更新的耗时"藏"起来</text>
+
+  <rect x="684" y="168" width="626" height="40" rx="7" fill="rgba(0,131,143,.09)" stroke="#00838f" stroke-dasharray="5 4"/>
+  <text x="997" y="186" fill="#00838f" font-size="10" text-anchor="middle">新一批 280 个环境实例同时在初始化 / 交互中</text>
+  <text x="997" y="200" fill="#587490" font-size="9" text-anchor="middle">环境交互是 CPU/IO 密集，与 GPU 上的梯度计算天然不争抢资源</text>
+
+  <rect x="684" y="230" width="626" height="40" rx="7" fill="rgba(85,139,47,.10)" stroke="#558b2f" stroke-dasharray="5 4"/>
+  <text x="997" y="248" fill="#558b2f" font-size="10" text-anchor="middle">推理引擎持续以【旧权重】服务采样</text>
+  <text x="997" y="263" fill="#587490" font-size="9" text-anchor="middle">本 step 结束才换权重 ⇒ 采样分布 π_old 与优化目标 π_θ 之间存在一个 step 的滞后（off-policy gap）</text>
+
+  <!-- ============ C · CRITIC ============ -->
+  <rect x="688" y="356" width="204" height="118" rx="7" fill="#f0e9fb" stroke="#6a3fb5"/>
+  <text x="697" y="374" fill="#6a3fb5" font-size="10.5" font-weight="700">Critic 更新（先行）</text>
+  <text x="697" y="392" fill="#2f4a63" font-size="9">① 价值前向：V_φ(s_t) for all t</text>
+  <text x="697" y="407" fill="#2f4a63" font-size="9">② GAE：δ_t → A_t → 回归目标 R_t</text>
+  <text x="697" y="422" fill="#2f4a63" font-size="9">③ 价值损失反向（clipped MSE）</text>
+  <text x="697" y="437" fill="#2f4a63" font-size="9">④ 参数更新 φ ← φ − α_φ ∇</text>
+  <text x="697" y="455" fill="#8a5200" font-size="9">⑤ 让出显存给 Actor</text>
+  <text x="697" y="469" fill="#587490" font-size="8.5">价值学习率 = 策略学习率的 15×</text>
+
+  <path d="M672,315 C680,315 682,350 686,360" stroke="#a86a00" stroke-width="1.6" fill="none" marker-end="url(#ac)"/>
+
+  <!-- values handoff -->
+  <path d="M892,410 L906,410" stroke="#6a3fb5" stroke-width="2.4" marker-end="url(#ac)"/>
+  <rect x="800" y="496" width="300" height="34" rx="6" fill="rgba(106,63,181,.09)" stroke="#6a3fb5" stroke-dasharray="4 3"/>
+  <text x="950" y="511" fill="#6a3fb5" font-size="9.5" text-anchor="middle" font-weight="700">交接物：baseline 价值估计 V_φ(s_t)</text>
+  <text x="950" y="524" fill="#587490" font-size="8.5" text-anchor="middle">Actor 需要它来构造 advantage，且它必须来自更新前的同一份经验</text>
+  <path d="M950,494 L950,478" stroke="#6a3fb5" stroke-width="1.4" stroke-dasharray="3 3" marker-end="url(#ac)"/>
+
+  <!-- ============ D · ACTOR ============ -->
+  <rect x="908" y="418" width="242" height="132" rx="7" fill="#e4edfb" stroke="#1565c0"/>
+  <text x="917" y="436" fill="#1565c0" font-size="10.5" font-weight="700">Actor 更新（后行）</text>
+  <text x="917" y="454" fill="#2f4a63" font-size="9">① 装载策略参数（Critic 已让出）</text>
+  <text x="917" y="469" fill="#2f4a63" font-size="9">② 旧策略前向：log π_old(a_t|s_t)</text>
+  <text x="917" y="484" fill="#2f4a63" font-size="9">③ 取 Critic 的 V_φ → 计算 A_t</text>
+  <text x="917" y="499" fill="#2f4a63" font-size="9">④ 优势归一化 / 长度上限裁剪</text>
+  <text x="917" y="514" fill="#2f4a63" font-size="9">⑤ clipped surrogate 反向（梯度累积）</text>
+  <text x="917" y="529" fill="#2f4a63" font-size="9">⑥ 参数更新 θ ← θ − α_θ ∇</text>
+  <text x="917" y="545" fill="#587490" font-size="8.5">ε = 0.2 ｜ KL 项关闭 ｜ 熵项仅监控不入目标</text>
+
+  <rect x="908" y="562" width="242" height="30" rx="6" fill="rgba(138,82,0,.09)" stroke="#8a5200" stroke-dasharray="4 3"/>
+  <text x="1029" y="581" fill="#8a5200" font-size="9" text-anchor="middle">前 2 个 step 跳过整块 D：critic-only warm-up</text>
+
+  <!-- ============ E · SYNC ============ -->
+  <rect x="1164" y="418" width="142" height="76" rx="7" fill="#fdecec" stroke="#c62828"/>
+  <text x="1173" y="436" fill="#c62828" font-size="10" font-weight="700">权重同步</text>
+  <text x="1173" y="453" fill="#2f4a63" font-size="8.8">① 暂停采样</text>
+  <text x="1173" y="466" fill="#2f4a63" font-size="8.8">② 失效 KV cache</text>
+  <text x="1173" y="479" fill="#2f4a63" font-size="8.8">③ 分桶广播新策略权重</text>
+  <text x="1173" y="491" fill="#2f4a63" font-size="8.8">④ 恢复采样</text>
+
+  <path d="M1235,416 C1235,340 1235,300 1235,272" stroke="#c62828" stroke-width="2.4" fill="none" marker-end="url(#ar)"/>
+  <text x="1228" y="330" fill="#c62828" font-size="9" text-anchor="end">θ 新权重</text>
+  <text x="1228" y="344" fill="#c62828" font-size="9" text-anchor="end">进入引擎</text>
+  <text x="1228" y="358" fill="#587490" font-size="8.5" text-anchor="end">π_old ← π_θ</text>
+
+  <!-- GPU sharing timeline -->
+  <rect x="688" y="606" width="618" height="52" rx="8" fill="#ffffff" stroke="#8a5200"/>
+  <text x="700" y="624" fill="#8a5200" font-size="10" font-weight="700">同一批训练 GPU 上的显存占用时间轴（Critic 与 Actor 共享同一组 GPU）</text>
+  <text x="700" y="640" fill="#587490" font-size="9.5">Critic 驻留 → Critic 让出 → Actor 驻留 → Actor 让出 → 同步权重时 Actor 短暂再驻留</text>
+  <text x="700" y="654" fill="#6b869f" font-size="9">两个同规模大模型不能共存于同一显存，因此 C 与 D 在物理上必须串行——这也正好符合"Actor 依赖 Critic 输出"的逻辑顺序</text>
+
+  <!-- periodic actions -->
+  <rect x="214" y="606" width="462" height="52" rx="8" fill="#ffffff" stroke="#c3d5e8"/>
+  <text x="226" y="624" fill="#0d47a1" font-size="10" font-weight="700">每 N 个 step 触发一次（不在每 step 的关键路径上）</text>
+  <text x="226" y="640" fill="#587490" font-size="9.5">• Checkpoint：策略与价值网络各存一份</text>
+  <text x="226" y="654" fill="#587490" font-size="9.5">• 留出集评测：固定 held-out 任务集，pass@3，独立采样温度</text>
+
+  <!-- bottom summary strip -->
+  <rect x="214" y="676" width="1092" height="70" rx="8" fill="#f7fafd" stroke="#c3d5e8"/>
+  <text x="226" y="695" fill="#0d47a1" font-size="10.5" font-weight="700">一句话时序</text>
+  <text x="226" y="714" fill="#2f4a63" font-size="10">采集 256 条带 0/1 奖励的完整轨迹  →  切成带 loss mask 的 token 批次并均衡分片  →</text>
+  <text x="226" y="730" fill="#2f4a63" font-size="10">Critic 前向给出 baseline 并自我回归  →  Actor 用 GAE advantage 做一次 clipped 策略更新  →  新权重回灌推理引擎，进入下一 step</text>
+</svg>
+</div>
+
+<div class="grid g3">
+  <div class="card tight"><b style="color:var(--rollout)">A 阶段主导 wall-clock</b>
+    <p style="font-size:12.5px;color:var(--dim)">一条轨迹要在真实终端里跑最多 60 turn 并执行验证测试，耗时是分钟级到小时级。
+    <b>采集通常比梯度计算更慢</b>，这是 agentic RL 与传统 RLHF 最大的体感差异。</p></div>
+  <div class="card tight"><b style="color:var(--critic)">C 必须早于 D</b>
+    <p style="font-size:12.5px;color:var(--dim)">Actor 的 advantage 依赖 baseline V<sub>φ</sub>(s<sub>t</sub>)，
+    而 V<sub>φ</sub> 只能由 Critic 前向给出。逻辑依赖与显存约束在这里恰好同向，顺序无歧义。</p></div>
+  <div class="card tight"><b style="color:var(--sync)">E 是唯一的全局屏障</b>
+    <p style="font-size:12.5px;color:var(--dim)">换权重前必须让在飞的采样收敛完毕，否则同一条轨迹的前后半段来自不同策略，
+    其 log π<sub>old</sub> 失去意义、ratio 不再可解释。</p></div>
+</div>
+</section>
+
+<section>
+<h2><span class="num">2</span>五个阶段逐一展开</h2>
+<p class="lead">同样的五个阶段，换成「输入 → 做什么 → 输出」的视角再看一遍。</p>
+
+<div class="stage" style="--c:var(--rollout)">
+  <div class="sh"><span class="n">A</span>轨迹采集 Rollout / Experience Collection<span class="badge">主导耗时</span></div>
+  <ul>
+    <li><b>过采样（over-sampling）</b>：目标 256 条轨迹，实际投放 280 条。终端任务的完成时间是重尾分布，
+        等最慢的那一条会让整个 step 停摆。</li>
+    <li><b>Agent–Environment 交互</b>：每条轨迹是一个多轮 MDP。
+        每一 turn：策略读取当前观测（历史对话 + 上一条命令的输出）→ 产生动作（一条 shell 命令）→
+        环境执行并返回新观测。上限 60 turn。</li>
+    <li><b>上下文管理</b>：长会话会超出模型上下文窗口，此时对历史做<b>摘要压缩</b>后继续，
+        而不是丢弃整条轨迹——否则长任务会被系统性地从训练分布里剔除。</li>
+    <li><b>奖励</b>：轨迹终止后在环境内运行该任务自带的验证测试，得到
+        <span class="term">r ∈ {0, 1}</span>（可验证的结果奖励 / verifiable outcome reward），无过程奖励。</li>
+    <li><b>截尾（tail cancellation）</b>：先返回的 256 条被接受，其余在途轨迹直接放弃。
+        <b>代价是批次分布偏向"快任务"</b>，这是为吞吐主动接受的偏置。</li>
+  </ul>
+  <div class="io">
+    <div class="in">IN ← 任务池中的 280 个 prompt</div>
+    <div class="out">OUT → 256 条 (观测, 动作, log π_old, 终局奖励) 轨迹</div>
+  </div>
+</div>
+
+<div class="stage" style="--c:var(--data)">
+  <div class="sh"><span class="n">B</span>经验批次构建 Experience Batch Construction<span class="badge">CPU 侧</span></div>
+  <ul>
+    <li><b>序列化 + loss mask</b>：把多轮对话摊平成一条 token 序列，并逐 token 标注是否参与损失。
+        <b>只有策略自己生成的 token 计入损失</b>；环境回显的命令输出属于观测，必须屏蔽，
+        否则模型会去"学习拟合终端输出"。</li>
+    <li><b>轨迹分组</b>：一条轨迹可能因上下文压缩被切成多个片段，这些片段共享同一个<b>轨迹标识</b>。
+        它保证 (a) 同一轨迹不会被拆到不同优化 step；(b) 损失归一化时用<b>整条轨迹</b>的有效 token 数作分母，
+        而不是各片段各算一次。</li>
+    <li><b>长度上限</b>：超过训练上下文上限的样本按"先弃最早内容"裁剪，并同步裁剪 mask 与 log 概率，保持对齐。</li>
+    <li><b>DP 分片 + 微批装箱</b>：按序列长度做<b>负载均衡分区</b>，使每个数据并行 rank 的 token 总量尽量相等，
+        并把微批数量对齐到并行度要求——否则流水线并行会失步（有 rank 空转等待）。</li>
+  </ul>
+  <div class="io">
+    <div class="in">IN ← 256 条原始轨迹</div>
+    <div class="out">OUT → 每个 DP rank 一份：token / mask / 奖励 / 分组 / 微批调度表</div>
+  </div>
+</div>
+
+<div class="stage" style="--c:var(--critic)">
+  <div class="sh"><span class="n">C</span>Critic 更新 Value Function Update<span class="badge">先行</span></div>
+  <ul>
+    <li><b>价值前向</b>：对批次中每个 token 位置给出状态价值 <span class="term">V<sub>φ</sub>(s<sub>t</sub>)</span>。</li>
+    <li><b>GAE</b>：用 V<sub>φ</sub> 把只存在于最后一个 token 上的稀疏奖励，反向递推成<b>逐 token 的优势</b>，
+        同时得到价值网络自己的回归目标 R<sub>t</sub>。</li>
+    <li><b>价值损失</b>：带裁剪的平方误差，防止冷启动阶段单步跳变过大。</li>
+    <li><b>为什么价值学习率远高于策略</b>：价值头是<b>随机初始化的新模块</b>，
+        而策略是已经预训练好的。一个未校准的 V<sub>φ</sub> 会输出错误的 advantage 符号，
+        直接污染策略更新方向。所以要让它尽快收敛——这也是<b>前 2 个 step 只训 Critic</b> 的原因。</li>
+    <li><b>健康指标</b>：<span class="term">explained variance = 1 − Var(R − V) / Var(R)</span>。
+        由负转正才说明价值网络真的学到了信号，而不是在输出常数。</li>
+  </ul>
+  <div class="io">
+    <div class="in">IN ← 经验批次</div>
+    <div class="out">OUT → 更新后的 φ ＋ 交给 Actor 的 baseline V<sub>φ</sub>(s<sub>t</sub>)</div>
+  </div>
+</div>
+
+<div class="stage" style="--c:var(--actor)">
+  <div class="sh"><span class="n">D</span>Actor 更新 Policy Update<span class="badge">后行</span></div>
+  <ul>
+    <li><b>旧策略前向</b>：重新计算 <span class="term">log π<sub>old</sub>(a<sub>t</sub>|s<sub>t</sub>)</span>
+        作为重要性比率的分母。<b>刻意不复用推理引擎返回的 log 概率</b>——
+        训练与推理是两套不同实现，其数值存在系统性偏差，直接混用会给 ratio 注入与策略变化无关的噪声。</li>
+    <li><b>构造优势</b>：接收 Critic 的 baseline，得到每个 token 的 A<sub>t</sub>，并做批内归一化。</li>
+    <li><b>clipped surrogate 反向</b>：梯度在多个微批上累积后统一更新，等效于一个大 batch。</li>
+    <li><b>约束方式</b>：本配置<b>只靠 clip 约束更新幅度</b>，KL 惩罚项关闭（因此无需常驻一份参考模型，
+        省下可观显存）；熵不进入优化目标，但仍持续记录——<b>熵崩塌是策略退化最早的征兆</b>。</li>
+  </ul>
+  <div class="io">
+    <div class="in">IN ← 经验批次 ＋ baseline V<sub>φ</sub></div>
+    <div class="out">OUT → 更新后的策略参数 θ</div>
+  </div>
+</div>
+
+<div class="stage" style="--c:var(--sync)">
+  <div class="sh"><span class="n">E</span>权重同步 Weight Synchronization<span class="badge">全局屏障</span></div>
+  <ul>
+    <li><b>暂停采样</b>：等在飞的推理请求收敛，避免一条轨迹跨两个策略版本。</li>
+    <li><b>失效 KV cache</b>：缓存里的 key/value 是<b>旧权重</b>算出来的，与新权重不兼容，必须整体丢弃。</li>
+    <li><b>分桶广播</b>：训练侧与推理侧的并行切分方式不同，权重需要先在训练侧聚合还原、
+        再按推理侧的布局分发。MoE 的专家参数量极大，必须<b>分批</b>传输而非一次性搬运。</li>
+    <li><b>恢复采样</b>：至此 <span class="term">π<sub>old</sub> ← π<sub>θ</sub></span>，off-policy 间隙被重置，进入下一 step。</li>
+  </ul>
+  <div class="io">
+    <div class="in">IN ← 新策略参数 θ（训练侧布局）</div>
+    <div class="out">OUT → 推理引擎持有新策略，可开始下一轮采样</div>
+  </div>
+</div>
+</section>
+
+<section>
+<h2><span class="num">3</span>这个 step 里的 PPO 数学</h2>
+<p class="lead">只列出时序图中实际被计算的量，按它们被计算出来的先后顺序排列。</p>
+
+<div class="card">
+<h3 style="margin-top:0">① 稀疏奖励 → per-token 奖励（阶段 C 开头）</h3>
+<div class="fml">
+r<sub>t</sub> = 0&nbsp;&nbsp;(t &lt; T)&nbsp;&nbsp;,&nbsp;&nbsp; r<sub>T</sub> = <span class="hl">r ∈ {0, 1}</span>
+<span class="lbl">奖励只存在于轨迹最后一个 token</span>
+</div>
+<p style="font-size:13px;color:var(--dim)">
+  一条数万 token 的轨迹，其奖励向量形如 <span class="term">[0, 0, …, 0, 1]</span> 或全 0。
+  <b>把这个极端稀疏的标量分配到每个 token 上，就是 Critic 存在的全部理由。</b>
+  （若配置了 KL 惩罚，它会作为逐 token 的负奖励叠加进 r<sub>t</sub>；本配置该项为 0。）
+</p>
+</div>
+
+<div class="card">
+<h3 style="margin-top:0">② GAE：反向递推出逐 token 优势（阶段 C）</h3>
+<div class="fml">
+δ<sub>t</sub> = r<sub>t</sub> + γ·V<sub>φ</sub>(s<sub>t+1</sub>) − V<sub>φ</sub>(s<sub>t</sub>)
+<span class="lbl">TD 残差</span><br>
+A<sub>t</sub> = δ<sub>t</sub> + γλ·A<sub>t+1</sub>
+<span class="lbl">从序列末端向前递推</span><br>
+R<sub>t</sub> = A<sub>t</sub> + V<sub>φ</sub>(s<sub>t</sub>)
+<span class="lbl">Critic 的回归目标</span>
+</div>
+<div class="note" style="margin-bottom:0">
+  <b>本配置取 γ = 1, λ = 1</b>，代入后 <span class="term">A<sub>t</sub> = r − V<sub>φ</sub>(s<sub>t</sub>)</span>，
+  即 GAE <b>退化为 Monte-Carlo 优势</b>：不做时间折扣、不做偏差-方差权衡，
+  完全由 V<sub>φ</sub> 承担基线职责。对"要么全过要么全不过"的可验证任务而言这是自洽的——
+  轨迹中途并不存在可供折扣的可信即时奖励。
+</div>
+</div>
+
+<div class="grid g2">
+<div class="card">
+<h3 style="margin-top:0">③ 策略目标（阶段 D）</h3>
+<div class="fml" style="font-size:13px">
+ρ<sub>t</sub> = π<sub>θ</sub>(a<sub>t</sub>|s<sub>t</sub>) / π<sub>old</sub>(a<sub>t</sub>|s<sub>t</sub>)<br>
+L<sup>CLIP</sup> = −min( ρ<sub>t</sub>A<sub>t</sub>,&nbsp;
+<span class="hl">clip</span>(ρ<sub>t</sub>, 1−ε, 1+ε)·A<sub>t</sub> )
+</div>
+<table>
+<tr><td><b>ε</b></td><td>0.2，上下对称</td></tr>
+<tr><td><b>KL 惩罚</b></td><td>关闭 ⇒ 无需常驻参考模型</td></tr>
+<tr><td><b>熵正则</b></td><td>系数 0，仅作为监控量记录</td></tr>
+<tr><td><b>clip 触发率</b></td><td>关键监控项：持续偏高说明更新步长过大</td></tr>
+</table>
+</div>
+<div class="card">
+<h3 style="margin-top:0">④ 价值目标（阶段 C）</h3>
+<div class="fml" style="font-size:13px">
+V<sup>clip</sup> = V<sub>old</sub> + clip(V<sub>φ</sub> − V<sub>old</sub>, −c, +c)<br>
+L<sup>V</sup> = max( (V<sup>clip</sup> − R<sub>t</sub>)², (V<sub>φ</sub> − R<sub>t</sub>)² )
+</div>
+<table>
+<tr><td><b>c</b></td><td>0.2</td></tr>
+<tr><td><b>α<sub>φ</sub> : α<sub>θ</sub></b></td><td>15 : 1（价值头需从随机初始化快速追上）</td></tr>
+<tr><td><b>warm-up</b></td><td>前 2 个 step 只更新 φ，不动 θ</td></tr>
+<tr><td><b>主指标</b></td><td>explained variance 由负转正</td></tr>
+</table>
+</div>
+</div>
+
+<h3>为什么这个任务必须用 PPO 而不是 GRPO</h3>
+<div class="grid g2">
+  <div class="card tight">
+    <b style="color:var(--dim)">GRPO 的基线来自组内对比</b>
+    <div class="fml" style="font-size:12.5px;margin:8px 0 0">
+      A<sub>i</sub> = ( r<sub>i</sub> − mean(r<sub>1..n</sub>) ) / std(r<sub>1..n</sub>)
+    </div>
+    <p style="font-size:12.5px;color:var(--dim);margin-top:8px">
+      不需要价值网络，但前提是<b>同一 prompt 采样 n 条</b>才能构成有意义的组内基线。
+    </p>
+  </div>
+  <div class="card tight" style="border-color:var(--critic)">
+    <b style="color:var(--critic)">这里的现实约束：n = 1</b>
+    <p style="font-size:12.5px;color:#2f4a63;margin-top:6px">
+      一条轨迹 = 一个隔离环境 + 最长数十分钟的交互 + 一次完整验证测试。
+      采样成本让 n &gt; 1 不经济，而 <b>n = 1 时组内均值等于自身，优势恒为 0</b>——
+      GRPO 在这里根本无法提供梯度信号。
+      因此必须引入一个<b>学习得到的价值基线</b>，即 PPO。
+      代价是多训一个同规模网络，并因此触发显存共享与串行调度（阶段 C/D）。
+    </p>
+  </div>
+</div>
+</section>
+
+<section>
+<h2><span class="num">4</span>并行性：什么在重叠，什么必须串行</h2>
+<p class="lead">时序图上的相对位置不是随意排的。每一处「并行」和每一处「串行」都有明确的原因。</p>
+
+<div class="svgwrap">
+<svg viewBox="0 0 1240 330" xmlns="http://www.w3.org/2000/svg" font-family="ui-monospace,monospace">
+  <defs><marker id="t1" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#587490"/></marker></defs>
+
+  <text x="14" y="22" fill="#0d47a1" font-size="12" font-weight="700">同步流水线（若采集与训练串行）</text>
+  <g font-size="10">
+    <rect x="14" y="34" width="300" height="30" rx="5" fill="#e8f5e9" stroke="#2e7d32"/>
+    <text x="164" y="53" fill="#2e7d32" text-anchor="middle">采集 step N</text>
+    <rect x="318" y="34" width="180" height="30" rx="5" fill="#f0e9fb" stroke="#6a3fb5"/>
+    <text x="408" y="53" fill="#6a3fb5" text-anchor="middle">Critic N</text>
+    <rect x="502" y="34" width="196" height="30" rx="5" fill="#e4edfb" stroke="#1565c0"/>
+    <text x="600" y="53" fill="#1565c0" text-anchor="middle">Actor N</text>
+    <rect x="702" y="34" width="70" height="30" rx="5" fill="#fdecec" stroke="#c62828"/>
+    <text x="737" y="53" fill="#c62828" text-anchor="middle">同步</text>
+    <rect x="776" y="34" width="300" height="30" rx="5" fill="#e8f5e9" stroke="#2e7d32" opacity=".5"/>
+    <text x="926" y="53" fill="#2e7d32" text-anchor="middle" opacity=".7">采集 step N+1</text>
+  </g>
+  <path d="M14,74 L1076,74" stroke="#587490" stroke-width="1" marker-end="url(#t1)"/>
+  <text x="1084" y="78" fill="#587490" font-size="9.5">step 时间 = 采集 + 训练（相加）</text>
+
+  <text x="14" y="120" fill="#2e7d32" font-size="12" font-weight="700">本流水线：采集与训练重叠</text>
+  <g font-size="10">
+    <rect x="14" y="132" width="300" height="30" rx="5" fill="#e8f5e9" stroke="#2e7d32"/>
+    <text x="164" y="151" fill="#2e7d32" text-anchor="middle">采集 step N</text>
+    <rect x="318" y="132" width="180" height="30" rx="5" fill="#f0e9fb" stroke="#6a3fb5"/>
+    <text x="408" y="151" fill="#6a3fb5" text-anchor="middle">Critic N</text>
+    <rect x="502" y="132" width="196" height="30" rx="5" fill="#e4edfb" stroke="#1565c0"/>
+    <text x="600" y="151" fill="#1565c0" text-anchor="middle">Actor N</text>
+    <rect x="702" y="132" width="70" height="30" rx="5" fill="#fdecec" stroke="#c62828"/>
+    <text x="737" y="151" fill="#c62828" text-anchor="middle">同步</text>
+
+    <rect x="318" y="168" width="454" height="30" rx="5" fill="rgba(46,125,50,.15)" stroke="#2e7d32" stroke-dasharray="4 3"/>
+    <text x="545" y="187" fill="#2e7d32" text-anchor="middle">采集 step N+1（与上方 Critic/Actor 并行进行）</text>
+
+    <rect x="776" y="132" width="180" height="30" rx="5" fill="#f0e9fb" stroke="#6a3fb5"/>
+    <text x="866" y="151" fill="#6a3fb5" text-anchor="middle">Critic N+1</text>
+    <rect x="960" y="132" width="196" height="30" rx="5" fill="#e4edfb" stroke="#1565c0"/>
+    <text x="1058" y="151" fill="#1565c0" text-anchor="middle">Actor N+1</text>
+  </g>
+  <path d="M14,210 L1160,210" stroke="#587490" stroke-width="1" marker-end="url(#t1)"/>
+  <text x="1168" y="214" fill="#2e7d32" font-size="9.5">step 时间 ≈ max(采集, 训练)</text>
+
+  <rect x="14" y="228" width="1210" height="42" rx="7" fill="rgba(138,82,0,.08)" stroke="#8a5200"/>
+  <text x="26" y="246" fill="#8a5200" font-size="10.5" font-weight="700">重叠的代价：off-policy gap</text>
+  <text x="26" y="262" fill="#2f4a63" font-size="10">step N+1 的轨迹是用 step N 更新【之前】的策略采出来的 ⇒ 训练数据始终滞后一个版本。这正是 PPO 的 importance ratio ρ 与 clip 机制所要处理的对象。</text>
+
+  <rect x="14" y="282" width="1210" height="40" rx="7" fill="rgba(255,123,114,.07)" stroke="#c62828"/>
+  <text x="26" y="300" fill="#c62828" font-size="10.5" font-weight="700">重叠的边界：权重同步前必须收敛</text>
+  <text x="26" y="315" fill="#2f4a63" font-size="10">同步是全局屏障。若在采样中途换权重，一条轨迹的前半段来自 π_old、后半段来自 π_new，其 log 概率不再对应任何单一策略，ratio 失去意义。</text>
+</svg>
+</div>
+
+<div class="tblwrap">
+<table>
+<thead><tr><th>关系</th><th>并行 / 串行</th><th>原因</th></tr></thead>
+<tbody>
+<tr><td>采集 step N+1 ↔ 训练 step N</td><td style="color:var(--rollout)"><b>并行</b></td>
+    <td>环境交互是 CPU/IO 密集且在独立机器上，与训练 GPU 不争抢资源。这是把采集耗时"藏"起来的唯一手段。</td></tr>
+<tr><td>280 条轨迹之间</td><td style="color:var(--rollout)"><b>并行</b></td>
+    <td>各自独立的环境实例，无共享状态。并发度受环境创建速率与配额限制。</td></tr>
+<tr><td>同一轨迹的各 turn</td><td style="color:var(--sync)"><b>串行</b></td>
+    <td>MDP 的本质：下一个观测依赖上一个动作的执行结果，无法提前。</td></tr>
+<tr><td>Critic 更新 → Actor 更新</td><td style="color:var(--sync)"><b>串行</b></td>
+    <td><b>双重原因</b>：① 逻辑上 Actor 的 advantage 需要 Critic 的 baseline；② 物理上两个同规模模型共享同一组 GPU，显存不允许共存。</td></tr>
+<tr><td>DP rank 之间</td><td style="color:var(--rollout)"><b>并行</b></td>
+    <td>各 rank 处理不同的样本分片，仅在梯度归约处同步。这也是为什么装箱必须按 token 数均衡——否则快的 rank 空等慢的。</td></tr>
+<tr><td>PP stage 之间</td><td style="color:var(--data)"><b>流水并行</b></td>
+    <td>微批在各级之间流动。要求所有 DP rank 的微批数量一致，否则流水线出现气泡甚至失步。</td></tr>
+<tr><td>训练 step N → 权重同步</td><td style="color:var(--sync)"><b>串行</b></td>
+    <td>必须先有新权重才能广播。</td></tr>
+<tr><td>权重同步 ↔ 采样</td><td style="color:var(--sync)"><b>互斥</b></td>
+    <td>同步期间暂停采样并失效 KV cache，保证任一轨迹只对应一个策略版本。</td></tr>
+</tbody>
+</table>
+</div>
+</section>
+
+<section>
+<h2><span class="num">5</span>数据在这个 step 里的形态变化</h2>
+<p class="lead">同一份信息在流水线上换了五次形态。看清这条链，就看清了整个 step。</p>
+
+<div class="svgwrap">
+<svg viewBox="0 0 1240 250" xmlns="http://www.w3.org/2000/svg" font-family="ui-monospace,monospace">
+  <defs><marker id="d1" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="#a86a00"/></marker></defs>
+  <g font-size="10">
+    <rect x="10" y="40" width="196" height="120" rx="9" fill="#ffffff" stroke="#00838f"/>
+    <text x="108" y="62" fill="#00838f" font-size="11" font-weight="700" text-anchor="middle">① 交互记录</text>
+    <text x="22" y="82" fill="#2f4a63">自然语言任务描述</text>
+    <text x="22" y="98" fill="#2f4a63">多轮：观测 / 动作</text>
+    <text x="22" y="114" fill="#2f4a63">终局：测试通过与否</text>
+    <text x="22" y="136" fill="#6b869f" font-size="9">形态：结构化对话 + 标量奖励</text>
+    <text x="22" y="150" fill="#6b869f" font-size="9">位置：环境侧</text>
+
+    <rect x="242" y="40" width="196" height="120" rx="9" fill="#ffffff" stroke="#a86a00"/>
+    <text x="340" y="62" fill="#a86a00" font-size="11" font-weight="700" text-anchor="middle">② 训练样本</text>
+    <text x="254" y="82" fill="#2f4a63">token 序列（摊平）</text>
+    <text x="254" y="98" fill="#2f4a63">loss mask（逐 token）</text>
+    <text x="254" y="114" fill="#2f4a63">轨迹标识 + 奖励</text>
+    <text x="254" y="136" fill="#6b869f" font-size="9">形态：定长 id 序列 + 0/1 掩码</text>
+    <text x="254" y="150" fill="#8a5200" font-size="9">★ 掩码决定"学什么"</text>
+
+    <rect x="474" y="40" width="196" height="120" rx="9" fill="#ffffff" stroke="#a86a00"/>
+    <text x="572" y="62" fill="#a86a00" font-size="11" font-weight="700" text-anchor="middle">③ 分片批次</text>
+    <text x="486" y="82" fill="#2f4a63">按 DP rank 切分</text>
+    <text x="486" y="98" fill="#2f4a63">微批装箱（长度均衡）</text>
+    <text x="486" y="114" fill="#2f4a63">同轨迹片段不跨 step</text>
+    <text x="486" y="136" fill="#6b869f" font-size="9">形态：每 rank 一份 + 调度表</text>
+    <text x="486" y="150" fill="#8a5200" font-size="9">★ 均衡决定"跑多快"</text>
+
+    <rect x="706" y="40" width="196" height="120" rx="9" fill="#ffffff" stroke="#6a3fb5"/>
+    <text x="804" y="62" fill="#6a3fb5" font-size="11" font-weight="700" text-anchor="middle">④ 学习信号</text>
+    <text x="718" y="82" fill="#2f4a63">V_φ(s_t) 逐 token 基线</text>
+    <text x="718" y="98" fill="#2f4a63">A_t 逐 token 优势</text>
+    <text x="718" y="114" fill="#2f4a63">R_t 价值回归目标</text>
+    <text x="718" y="136" fill="#6b869f" font-size="9">形态：与 token 对齐的浮点张量</text>
+    <text x="718" y="150" fill="#8a5200" font-size="9">★ 稀疏奖励在此被"摊开"</text>
+
+    <rect x="938" y="40" width="292" height="120" rx="9" fill="#ffffff" stroke="#1565c0"/>
+    <text x="1084" y="62" fill="#1565c0" font-size="11" font-weight="700" text-anchor="middle">⑤ 参数增量</text>
+    <text x="950" y="82" fill="#2f4a63">Δφ：价值网络（每 step 都更新）</text>
+    <text x="950" y="98" fill="#2f4a63">Δθ：策略网络（warm-up 后才更新）</text>
+    <text x="950" y="118" fill="#587490" font-size="9">θ 随后被广播回推理引擎，成为下一批采样的行为策略；</text>
+    <text x="950" y="132" fill="#587490" font-size="9">φ 只在训练侧使用，永不进入推理路径。</text>
+    <text x="950" y="150" fill="#8a5200" font-size="9">★ 闭环在此合上</text>
+  </g>
+  <g stroke="#a86a00" stroke-width="2">
+    <path d="M208,100 L238,100" marker-end="url(#d1)"/>
+    <path d="M440,100 L470,100" marker-end="url(#d1)"/>
+    <path d="M672,100 L702,100" marker-end="url(#d1)"/>
+    <path d="M904,100 L934,100" marker-end="url(#d1)"/>
+  </g>
+  <text x="223" y="94" fill="#587490" font-size="8" text-anchor="middle">分词</text>
+  <text x="455" y="94" fill="#587490" font-size="8" text-anchor="middle">调度</text>
+  <text x="687" y="94" fill="#587490" font-size="8" text-anchor="middle">GAE</text>
+  <text x="919" y="94" fill="#587490" font-size="8" text-anchor="middle">反向</text>
+
+  <rect x="10" y="180" width="1220" height="58" rx="8" fill="#f7fafd" stroke="#c3d5e8"/>
+  <text x="22" y="199" fill="#0d47a1" font-size="10.5" font-weight="700">两个最容易出错的环节</text>
+  <text x="22" y="217" fill="#2f4a63" font-size="9.8">① ②→③ 的掩码对齐：多轮对话在压缩/裁剪后，若掩码与 token 错位一格，模型就会去拟合环境输出而非自己的动作，且损失曲线看起来完全正常。</text>
+  <text x="22" y="232" fill="#2f4a63" font-size="9.8">② ③ 的归一化分母：一条轨迹被切成多片后，损失必须以整条轨迹的有效 token 数为分母，否则被切得越碎的（通常是越长的）轨迹权重越高，产生长度偏置。</text>
+</svg>
+</div>
+</section>
+
+<section>
+<h2><span class="num">6</span>观察这个 step 是否健康</h2>
+<p class="lead">按「先看哪个」的顺序排列。前两项决定 run 是否值得继续跑。</p>
+<div class="tblwrap">
+<table>
+<thead><tr><th>指标</th><th>所属阶段</th><th>健康表现</th><th>异常含义</th></tr></thead>
+<tbody>
+<tr><td><b>explained variance</b><br><span style="color:var(--dim2);font-size:11px">价值拟合度</span></td><td>C</td>
+    <td>由负值逐步转正并上升</td>
+    <td>长期为负 ⇒ 价值网络在输出接近常数，advantage 无信息，策略更新等于噪声</td></tr>
+<tr><td><b>held-out 通过率</b><br><span style="color:var(--dim2);font-size:11px">pass@k</span></td><td>周期性评测</td>
+    <td>随 step 上升</td>
+    <td>训练奖励涨但评测不涨 ⇒ 过拟合训练任务池</td></tr>
+<tr><td><b>平均轨迹奖励</b></td><td>A</td>
+    <td>缓慢上升</td>
+    <td>长期平坦（且价值网络健康）⇒ 瓶颈在<b>数据</b>：任务过难或分布不匹配，而非超参问题</td></tr>
+<tr><td><b>clip 触发率</b></td><td>D</td>
+    <td>稳定在较低水平</td>
+    <td>持续偏高 ⇒ 单步更新幅度过大，ratio 频繁越界，有效梯度被裁掉</td></tr>
+<tr><td><b>策略熵</b></td><td>D</td>
+    <td>缓慢下降</td>
+    <td>快速塌陷 ⇒ 策略退化为确定性输出，探索终止（即使熵不在目标里也必须监控）</td></tr>
+<tr><td><b>截尾轨迹占比</b></td><td>A</td>
+    <td>低且稳定</td>
+    <td>偏高 ⇒ 批次严重偏向快任务，训练分布与评测分布脱节</td></tr>
+<tr><td><b>被长度裁剪的样本比</b></td><td>B</td>
+    <td>接近 0</td>
+    <td>偏高 ⇒ 训练上下文上限过紧，长轨迹的早期决策被系统性丢弃</td></tr>
+<tr><td><b>轨迹终止状态分布</b></td><td>A</td>
+    <td>正常完成占绝大多数</td>
+    <td>超时/失败占比上升 ⇒ 环境侧问题（配额、镜像、超时设置），非算法问题</td></tr>
+</tbody>
+</table>
+</div>
+
+<div class="warn">
+  <b>特别关注：warm-up 结束后的第一个联合更新步</b>。
+  前若干 step 只更新价值网络，此时显存中实际只有一个大模型在活动；
+  <b>第一个 Actor 与 Critic 都参与的 step 才会真正触及显存峰值</b>。
+  这是整个配置最脆弱的时刻——能顺利通过它，才算验证了这套并行方案。
+</div>
+</section>
+
+</main>
+
+<footer>
+  <p>本文档仅描述<b>训练流程本身</b>：模块职责、时序依赖、数据形态与强化学习目标。
+  实现细节（函数、文件、框架 API）不在本文范围内——如需对照代码，见同目录的框架全景文档。</p>
+</footer>
+
+</body>
+</html>

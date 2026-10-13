@@ -1,0 +1,1635 @@
+from __future__ import annotations
+
+import asyncio
+import copy
+import itertools
+import json
+import logging
+import math
+import shutil
+import time
+from pathlib import Path
+from typing import Any
+from urllib.parse import unquote, urlparse
+
+from slime.rollout.base_types import RolloutFnEvalOutput, RolloutFnTrainOutput
+from slime.utils.async_utils import run
+from slime.utils.misc import load_function
+from slime.utils.types import Sample
+
+from slime_plugins.harbor.atif_adapter import (
+    RolloutConversionError,
+    explain_trial_result_conversion,
+    samples_from_trial_result,
+)
+from slime_plugins.harbor.import_utils import (
+    ensure_daytona_api_proxy,
+    ensure_daytona_s3_proxy,
+    ensure_harbor_distribution_metadata,
+)
+
+logger = logging.getLogger(__name__)
+
+# Round-robin cursor over TrialWorker actors. Reset when the worker list size
+# or actor handle identity changes (e.g., actor death + replacement).
+_worker_cycle: itertools.cycle | None = None
+_worker_cycle_len: int = 0
+_worker_cycle_fingerprint: tuple[int, ...] | None = None
+
+
+class HarborTrialWorkersUnavailableError(RuntimeError):
+    """Fatal cluster-level loss of every distributed Harbor TrialWorker."""
+
+
+class _AsyncTokenBucket:
+    """Process-global async rate limiter for Daytona sandbox ``.create()`` calls.
+
+    Daytona enforces a PER-ORG creation limit (default 600/min = 10/s, on
+    ``.create()`` specifically — snapshots count too). Our fully-async rollout
+    fires up to ``harbor_fully_async_max_concurrent_groups`` (~280) creations in a
+    single ~1s burst at rollout start, which is ~28x over the limit and gets every
+    trial rejected with ``Generic S3 error: HEAD .../context.tar after 10 retries``
+    (the build-context upload is throttled). See PPO_INTEGRATION_NOTES.md.
+
+    Because every trial is dispatched through the single rollout-manager process
+    (``_run_one_with_semaphore``), one process-global bucket is sufficient to pace
+    the whole org's create rate. ``rate`` is tokens/sec; ``capacity`` is the max
+    burst. ``acquire()`` blocks until a token is available.
+    """
+
+    def __init__(self, rate: float, capacity: float):
+        self.rate = float(rate)
+        self.capacity = float(capacity)
+        self._tokens = float(capacity)
+        self._updated = time.monotonic()
+        # One lock PER event loop, not a single lock bound to whichever loop
+        # first awaited it. This bucket is a module-global reused across two
+        # distinct loops: the fully-async training loop (its own
+        # ``asyncio.run`` on a worker thread) and the shared eval loop
+        # (``slime.utils.async_utils.run``'s persistent AsyncLoopThread). A
+        # single ``asyncio.Lock()`` binds to the first loop that awaits it, so
+        # the *other* loop's ``async with self._lock`` raises
+        # "is bound to a different event loop" and every trial on that loop is
+        # dropped before dispatch. (Seen on run 20260703_001109: 82/89 eval
+        # tasks lost this way — eval/harbor collapsed to n=11. See
+        # PPO_INTEGRATION_NOTES.md §10.) Keying by the running loop keeps the
+        # token budget process-wide while giving each loop a loop-native lock.
+        # NB: the token math (``_tokens``/``_updated``) is now only loosely
+        # synchronized when two loops on two threads acquire concurrently — the
+        # worst case is a momentary few-token over/undercount, immaterial for a
+        # soft pacer running at 6/s against a 600/min hard org limit (and the
+        # real in-flight cap is enforced separately by the trial semaphore).
+        self._locks: dict[int, asyncio.Lock] = {}
+
+    def _lock_for_running_loop(self) -> asyncio.Lock:
+        loop = asyncio.get_running_loop()
+        key = id(loop)
+        lock = self._locks.get(key)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._locks[key] = lock
+        return lock
+
+    async def acquire(self) -> None:
+        if self.rate <= 0:
+            return
+        async with self._lock_for_running_loop():
+            while True:
+                now = time.monotonic()
+                self._tokens = min(self.capacity, self._tokens + (now - self._updated) * self.rate)
+                self._updated = now
+                if self._tokens >= 1.0:
+                    self._tokens -= 1.0
+                    return
+                # Wait just long enough for the next token to accrue.
+                deficit = 1.0 - self._tokens
+                await asyncio.sleep(deficit / self.rate)
+
+
+# One bucket per process, (re)built when the configured rate changes.
+_create_rate_limiter: _AsyncTokenBucket | None = None
+_create_rate_limiter_rate: float = -1.0
+
+
+def _get_create_rate_limiter(args) -> _AsyncTokenBucket | None:
+    """Return the shared create-rate limiter, or None if rate limiting is off.
+
+    Configured via ``harbor_create_rate_per_sec`` (tokens/sec; 0 or unset = no
+    limiting, back-compat). Burst capacity defaults to ~1s worth of tokens but is
+    overridable via ``harbor_create_rate_burst``.
+    """
+    global _create_rate_limiter, _create_rate_limiter_rate
+    rate = _float_arg(args, "harbor_create_rate_per_sec", 0.0)
+    if rate <= 0:
+        return None
+    if _create_rate_limiter is None or _create_rate_limiter_rate != rate:
+        capacity = _float_arg(args, "harbor_create_rate_burst", 0.0)
+        if capacity <= 0:
+            capacity = max(1.0, rate)
+        _create_rate_limiter = _AsyncTokenBucket(rate=rate, capacity=capacity)
+        _create_rate_limiter_rate = rate
+        logger.info(
+            "Harbor sandbox-create rate limiter active: %.2f creates/sec (%.0f/min), burst=%.0f",
+            rate, rate * 60.0, capacity,
+        )
+    return _create_rate_limiter
+
+
+def _float_arg(args, name: str, default: float) -> float:
+    value = getattr(args, name, default)
+    if value is None:
+        return default
+    return float(value)
+
+
+def _curriculum_max_turns(args, rollout_id: int) -> int | None:
+    """max_turns(r) = base + step * max(0, r - start), capped at the ceiling.
+
+    Returns None when the curriculum is disabled, in which case the static
+    ``harbor_trial_defaults.agent.kwargs.max_turns`` from the YAML is used as-is.
+
+    Rationale for a schedule instead of a constant: run #2 capped turns at 60 and
+    censored 76.6% of trajectories; lifting straight to 500 in the S2 run gave the
+    policy far more exploration variance than it could use. A linear ramp releases
+    horizon gradually so each step's turn budget is only slightly beyond what the
+    policy already handles.
+
+    NOTE: the ramp is keyed on the ABSOLUTE rollout_id, so it is stable across
+    restarts -- resuming at rollout_id 20 always yields the same budget for step 20
+    regardless of how the run got there.
+    """
+    if not bool(getattr(args, "harbor_turn_curriculum_enable", False)):
+        return None
+    base = int(_float_arg(args, "harbor_turn_curriculum_base_turns", 100))
+    increment = int(_float_arg(args, "harbor_turn_curriculum_increment", 5))
+    start = int(_float_arg(args, "harbor_turn_curriculum_start_rollout_id", 0))
+    ceiling = int(_float_arg(args, "harbor_turn_curriculum_max_turns_cap", 500))
+    value = base + increment * max(0, int(rollout_id) - start)
+    return max(1, min(ceiling, value))
+
+
+def _is_eval_args(args) -> bool:
+    """True when this is the eval pass.
+
+    _generate_eval_async builds a copy.copy(args) whose trial-name template is
+    re-pointed at the "slime-eval-" namespace; that flag is the only reliable
+    in-band marker, since _build_trial_config itself takes no `evaluation` kwarg.
+    """
+    template = getattr(args, "harbor_trial_name_template", "") or ""
+    return "slime-eval-" in template
+
+
+_CURRICULUM_LOGGED: set[int] = set()
+
+
+def _log_curriculum_max_turns(rollout_id: int, max_turns: int, previous) -> None:
+    """Log the curriculum budget once per rollout.
+
+    _build_trial_config runs once per trial (256+ per step) and is executed inside
+    per-node Ray workers, so an unguarded log would emit hundreds of duplicate
+    lines per step. The guard is per worker process, which is the best available
+    granularity -- expect roughly one line per node per step, not one per trial.
+    """
+    if rollout_id in _CURRICULUM_LOGGED:
+        return
+    _CURRICULUM_LOGGED.add(rollout_id)
+    logger.info(
+        "[Rollout %s] Curriculum max_turns updated to: %s (was %s)",
+        rollout_id,
+        max_turns,
+        previous if previous is not None else "unset",
+    )
+
+
+def generate_rollout(args, rollout_id, data_source, evaluation=False):
+    if evaluation:
+        output = run(_generate_eval_async(args, rollout_id, data_source))
+        return RolloutFnEvalOutput(data={"harbor": output["eval"]}, metrics=output["metrics"])
+
+    output = run(_generate_rollout_async(args, rollout_id, data_source))
+    return RolloutFnTrainOutput(samples=output["samples"], metrics=output["metrics"])
+
+
+async def _generate_rollout_async(args, rollout_id: int, data_source) -> dict[str, Any]:
+    target_groups = int(args.rollout_batch_size)
+    over_sampling_groups = _over_sampling_group_window(args, target_groups)
+    target_samples_per_group = int(getattr(args, "n_samples_per_prompt", 1) or 1)
+    require_full_groups = _require_full_rollout_groups(args)
+    max_group_attempts = _max_rollout_group_attempts(args, target_groups, over_sampling_groups)
+    concurrency = int(getattr(args, "harbor_num_concurrent_trials", 1) or 1)
+    retry_missing_samples = int(getattr(args, "harbor_retry_missing_samples", 0) or 0)
+    semaphore = asyncio.Semaphore(concurrency)
+
+    output_groups: list[list[Sample]] = []
+    converted_count = 0
+    failed_count = 0
+    missing_count = 0
+    group_attempts = 0
+    incomplete_groups = 0
+    partial_groups = 0
+    partial_tail_trials_cancelled = 0
+    overflow_samples = 0
+    overflow_group_units = 0
+    accepted_group_units = 0
+    next_trial_group_index = 0
+    pending_group_tasks: set[asyncio.Task] = set()
+    pending_group_started_at: dict[asyncio.Task, float] = {}
+    completed_group_latencies: list[float] = []
+    cancelled_tail_ages: list[float] = []
+    consumed_group_tasks = 0
+    completed_group_tasks = 0
+    cancelled_tail_group_tasks = 0
+    discarded_completed_groups = 0
+    discarded_converted_count = 0
+    discarded_trajectory_count = 0
+    discarded_failed_count = 0
+    discarded_missing_count = 0
+
+    def submit_group_tasks(num_groups: int) -> int:
+        nonlocal group_attempts, next_trial_group_index
+
+        remaining_attempts = max_group_attempts - group_attempts
+        if num_groups <= 0 or remaining_attempts <= 0:
+            return 0
+
+        base_groups = data_source.get_samples(min(num_groups, remaining_attempts))
+        group_attempts += len(base_groups)
+        for base_group in base_groups:
+            trial_group_index = next_trial_group_index
+            next_trial_group_index += 1
+            task = asyncio.create_task(
+                _run_one_group(
+                    args,
+                    rollout_id,
+                    trial_group_index,
+                    base_group,
+                    semaphore,
+                    retry_missing_samples=retry_missing_samples,
+                )
+            )
+            pending_group_tasks.add(task)
+            pending_group_started_at[task] = time.monotonic()
+        return len(base_groups)
+
+    def record_group_latency(task: asyncio.Task, sink: list[float]) -> None:
+        started_at = pending_group_started_at.pop(task, None)
+        if started_at is not None:
+            sink.append(time.monotonic() - started_at)
+
+    def discard_completed_group_task(task: asyncio.Task) -> None:
+        nonlocal completed_group_tasks, discarded_completed_groups
+        nonlocal discarded_converted_count, discarded_trajectory_count
+        nonlocal discarded_failed_count, discarded_missing_count
+
+        completed_group_tasks += 1
+        discarded_completed_groups += 1
+        record_group_latency(task, completed_group_latencies)
+        if task.cancelled():
+            return
+        try:
+            _group, group_stats = task.result()
+            discarded_converted_count += group_stats["converted"]
+            discarded_trajectory_count += group_stats.get("trajectories", 0)
+            discarded_failed_count += group_stats["failed"]
+            discarded_missing_count += group_stats["missing"]
+        except Exception:
+            logger.warning("Discarding completed over-sampled Harbor group task with error.", exc_info=True)
+
+    try:
+        submit_group_tasks(over_sampling_groups)
+        while len(output_groups) < target_groups:
+            if not pending_group_tasks:
+                if submit_group_tasks(over_sampling_groups - len(output_groups)) == 0:
+                    break
+
+            done, pending_group_tasks = await asyncio.wait(
+                pending_group_tasks, return_when=asyncio.FIRST_COMPLETED
+            )
+            for task in done:
+                if len(output_groups) >= target_groups:
+                    discard_completed_group_task(task)
+                    continue
+
+                completed_group_tasks += 1
+                consumed_group_tasks += 1
+                record_group_latency(task, completed_group_latencies)
+                group, group_stats = task.result()
+                converted_count += group_stats["converted"]
+                failed_count += group_stats["failed"]
+                missing_count += group_stats["missing"]
+                partial_tail_trials_cancelled += int(group_stats.get("cancelled_tail_trials", 0) or 0)
+                group_unit_count = _group_unit_count(args, group, group_stats)
+
+                if require_full_groups and group_unit_count < target_samples_per_group:
+                    if _accepts_partial_group(args, group_unit_count, target_samples_per_group):
+                        partial_groups += 1
+                        logger.info(
+                            "Accepting partial Harbor rollout group with %s/%s %s units.",
+                            group_unit_count,
+                            target_samples_per_group,
+                            _group_unit(args),
+                        )
+                    else:
+                        incomplete_groups += 1
+                        logger.warning(
+                            "Dropping incomplete Harbor rollout group with %s/%s %s units; "
+                            "will backfill another group if attempts remain.",
+                            group_unit_count,
+                            target_samples_per_group,
+                            _group_unit(args),
+                        )
+                        continue
+
+                if require_full_groups and _group_unit(args) == "sample" and len(group) > target_samples_per_group:
+                    overflow_samples += len(group) - target_samples_per_group
+                    group = group[:target_samples_per_group]
+                    group_unit_count = len(group)
+                elif require_full_groups and group_unit_count > target_samples_per_group:
+                    overflow_group_units += group_unit_count - target_samples_per_group
+
+                if group:
+                    output_groups.append(group)
+                    accepted_group_units += group_unit_count
+
+            if len(output_groups) >= target_groups:
+                break
+
+            open_slots = over_sampling_groups - len(output_groups) - len(pending_group_tasks)
+            submit_group_tasks(open_slots)
+    finally:
+        if pending_group_tasks:
+            cancelled_tail_group_tasks = len(pending_group_tasks)
+            now = time.monotonic()
+            for task in pending_group_tasks:
+                started_at = pending_group_started_at.pop(task, None)
+                if started_at is not None:
+                    cancelled_tail_ages.append(now - started_at)
+                task.cancel()
+            await asyncio.gather(*pending_group_tasks, return_exceptions=True)
+
+    if not output_groups:
+        raise RuntimeError("Harbor rollout produced no trainable slime samples.")
+    if require_full_groups and len(output_groups) < target_groups:
+        raise RuntimeError(
+            "Harbor rollout could not produce enough complete trainable groups: "
+            f"{len(output_groups)}/{target_groups} groups after {group_attempts} attempts. "
+            "Increase `harbor_rollout_group_attempt_multiplier`, reduce failing tasks, or relax "
+            "`harbor_require_full_rollout_groups`."
+        )
+
+    _apply_rollout_sample_hooks(args, output_groups, data_source)
+
+    final_samples = [sample for group in output_groups for sample in group]
+    _validate_rollout_logprobs(args, final_samples)
+    metrics = {
+        "harbor/num_groups": len(output_groups),
+        "harbor/num_samples": len(final_samples),
+        "harbor/num_converted_samples": converted_count,
+        "harbor/num_failed_trials": failed_count,
+        "harbor/num_missing_rollout_details": missing_count,
+        "harbor/num_trajectory_samples": _count_unique_trajectories(final_samples),
+        "harbor/num_accepted_group_units": accepted_group_units,
+        "harbor/num_group_attempts": group_attempts,
+        "harbor/num_partial_groups_accepted": partial_groups,
+        "harbor/num_partial_tail_trials_cancelled": partial_tail_trials_cancelled,
+        "harbor/partial_group_min_units": _partial_group_min_units(args, target_samples_per_group),
+        "harbor/num_incomplete_groups_dropped": incomplete_groups,
+        "harbor/num_overflow_samples_trimmed": overflow_samples,
+        "harbor/num_overflow_group_units": overflow_group_units,
+        "harbor/over_sampling_batch_size": over_sampling_groups,
+        "harbor/num_submitted_groups": group_attempts,
+        "harbor/num_completed_group_tasks": completed_group_tasks,
+        "harbor/num_consumed_group_tasks": consumed_group_tasks,
+        "harbor/num_accepted_groups": len(output_groups),
+        "harbor/num_cancelled_group_tasks": cancelled_tail_group_tasks,
+        "harbor/num_cancelled_tail_group_tasks": cancelled_tail_group_tasks,
+        "harbor/num_discarded_completed_group_tasks": discarded_completed_groups,
+        "harbor/num_discarded_converted_samples": discarded_converted_count,
+        "harbor/num_discarded_trajectory_samples": discarded_trajectory_count,
+        "harbor/num_discarded_failed_trials": discarded_failed_count,
+        "harbor/num_discarded_missing_rollout_details": discarded_missing_count,
+        "harbor/trial_worker_count": int(getattr(args, "_harbor_trial_worker_count", 0) or 0),
+        "harbor/trial_worker_healthy_count": int(getattr(args, "_harbor_trial_worker_healthy_count", 0) or 0),
+        "harbor/trial_worker_healthcheck_failed": int(
+            getattr(args, "_harbor_trial_worker_healthcheck_failed", 0) or 0
+        ),
+        "harbor/trial_worker_healthcheck_killed": int(
+            getattr(args, "_harbor_trial_worker_healthcheck_killed", 0) or 0
+        ),
+    }
+    _add_latency_metrics(metrics, "harbor/group_latency", completed_group_latencies)
+    _add_latency_metrics(metrics, "harbor/cancelled_tail_age", cancelled_tail_ages)
+    if final_samples:
+        metrics["harbor/reward_mean"] = sum(float(sample.reward) for sample in final_samples) / len(final_samples)
+    _add_sample_health_metrics(metrics, final_samples)
+
+    return {"samples": output_groups, "metrics": metrics}
+
+
+async def _generate_eval_async(args, rollout_id: int, data_source) -> dict[str, Any]:
+    """Run the FULL held-out eval set once and return per-sample rewards.
+
+    Deliberately separate from ``_generate_rollout_async``: evaluation has the
+    opposite contract from training. Training over-samples, backfills until it
+    has exactly ``rollout_batch_size`` complete groups, and cancels slow tail
+    trials. Eval must instead run *every* eval task exactly once, wait for all
+    of them (no tail-cancellation — a slow task is still a real datapoint), and
+    accept whatever comes back. It also must NOT apply training-only sample
+    hooks (length-reward shaping, dynamic filters) so ``eval/harbor`` stays a
+    clean mean task reward (== TB2 pass rate).
+
+    Reuses ``_run_one_group`` for the actual per-task trial work, so the agent /
+    sandbox / conversion path is identical to training.
+    """
+    concurrency = int(getattr(args, "harbor_num_concurrent_trials", 1) or 1)
+    semaphore = asyncio.Semaphore(concurrency)
+
+    # The eval branch of HarborTaskDataSource returns one group per eval task
+    # (the full fixed set), drawing n_samples_per_eval_prompt samples per task,
+    # without touching the training cursor. num_samples is ignored in eval mode.
+    eval_groups = data_source.get_samples(0, evaluation=True)
+    num_eval_tasks = len(eval_groups)
+
+    # Training may accept a partial n-sample group (for example
+    # harbor_partial_group_min_units=1) to avoid waiting for slow GRPO tails.
+    # Evaluation pass@k has the opposite contract: all k attempts are required
+    # before taking max(reward_1..reward_k). Disable the training-only partial
+    # cutoff without mutating the shared args object used by training.
+    eval_args = copy.copy(args)
+    if getattr(args, "enable_score_centering", False):
+        eval_args.enable_score_centering = False
+        eval_args._sc_eval_dispatch = True
+    if getattr(args, "enable_tb_gae", False) is True:
+        eval_args.enable_tb_gae = False
+        eval_args._tb_gae_eval_dispatch = True
+    eval_args.harbor_partial_group_min_units = 0
+    eval_args.harbor_partial_group_min_trajectories = 0
+    # Eval and train both use rollout_id=0 at startup. Give eval trials their own
+    # namespace so the subsequent training rollout cannot overwrite/reuse
+    # slime-r0-g*-s0-* result/trajectory directories from baseline evaluation.
+    eval_args.harbor_trial_name_template = (
+        "slime-eval-r{rollout_id}-g{group_index}-s{sample_rank}-i{sample_index}"
+    )
+    # Harbor's agent config is built from rollout_* fields. Route the eval-only
+    # sampling knobs into that existing path so pass@k attempts use the intended
+    # independent sampling distribution without changing training rollout.
+    if getattr(args, "eval_temperature", None) is not None:
+        eval_args.rollout_temperature = args.eval_temperature
+    if getattr(args, "eval_top_p", None) is not None:
+        eval_args.rollout_top_p = args.eval_top_p
+    if getattr(args, "eval_top_k", None) is not None:
+        eval_args.rollout_top_k = args.eval_top_k
+
+    tasks = [
+        asyncio.create_task(
+            _run_one_group(
+                eval_args,
+                rollout_id,
+                group_index,
+                base_group,
+                semaphore,
+                retry_missing_samples=0,
+            )
+        )
+        for group_index, base_group in enumerate(eval_groups)
+    ]
+
+    # Coordinator-side TOTAL eval wall (added 2026-06-19). Without it, ONE eval
+    # task whose trial deterministically hangs (agent or sandbox network, not
+    # caught by the verifier wall) can stall the whole eval for hours: the
+    # per-trial harbor_trial_remote_timeout_sec fires, but the worker loop then
+    # RETRIES the same task on the next worker, where it hangs again — each retry
+    # costing another remote_timeout. eval_9 of tb2of_raw_20260619_115727 sat
+    # >105min this way. With a coordinator wall we wait for the bulk of tasks, then
+    # at the deadline cancel whatever is still pending and score eval on the tasks
+    # that DID finish (a never-finishing task is, for pass-rate purposes, a fail).
+    # 0/None disables the wall (legacy unbounded gather). Default below is generous
+    # vs a healthy full-set eval (~60min) but bounds the pathological tail.
+    eval_total_timeout = _float_arg(args, "harbor_eval_total_timeout_sec", 0.0)
+
+    output_groups: list[list[Sample]] = []
+    converted_count = 0
+    failed_count = 0
+    missing_count = 0
+    timed_out_groups = 0
+
+    if eval_total_timeout > 0:
+        done, pending = await asyncio.wait(tasks, timeout=eval_total_timeout)
+        if pending:
+            timed_out_groups = len(pending)
+            logger.warning(
+                "Harbor eval %s hit the coordinator total-timeout (%.0fs): cancelling "
+                "%s/%s still-pending eval task(s) and scoring on the %s that finished.",
+                rollout_id,
+                eval_total_timeout,
+                timed_out_groups,
+                num_eval_tasks,
+                len(done),
+            )
+            for task in pending:
+                task.cancel()
+            # Let the cancelled group tasks run their finally-blocks (which cancel
+            # their child trials) so we don't leak in-flight sandboxes.
+            await asyncio.gather(*pending, return_exceptions=True)
+        # Safely unwrap each finished task: task.exception() never re-raises
+        # (unlike task.result()), so a group that finished by raising is captured
+        # as an exception rather than blowing up this comprehension — matching the
+        # return_exceptions=True semantics of the legacy gather path below.
+        results = [task.exception() or task.result() for task in done]
+    else:
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    for result in results:
+        if isinstance(result, BaseException):
+            failed_count += 1
+            logger.warning("Harbor eval group failed: %s", result)
+            continue
+        group, group_stats = result
+        converted_count += group_stats.get("converted", 0)
+        failed_count += group_stats.get("failed", 0)
+        missing_count += group_stats.get("missing", 0)
+        if group:
+            output_groups.append(group)
+
+    final_samples = [sample for group in output_groups for sample in group]
+
+    # Eval scores are TRAJECTORY/ATTEMPT level, not converted-sample level.
+    # trajectory_retokenized can emit many chunk Samples for one Harbor trial and
+    # copies the same verifier reward onto every chunk. Counting those chunks made
+    # long trajectories contribute multiple "resolved" units (and could even make
+    # eval_resolved_rate_full > 1). Deduplicate by the stable trajectory key before
+    # computing all benchmark pass-rate metrics. Keep final_samples below for
+    # response-length/health diagnostics only.
+    eval_rewards, eval_truncated = _deduplicate_eval_trajectory_outcomes(output_groups)
+    eval_n_per_prompt = int(
+        getattr(args, "n_samples_per_eval_prompt", None)
+        or getattr(args, "n_samples_per_prompt", 1)
+        or 1
+    )
+    eval_rewards_by_task = _group_eval_trajectory_rewards_by_task(
+        output_groups, n_per_prompt=eval_n_per_prompt
+    )
+
+    metrics = _compute_eval_count_metrics(
+        rewards=eval_rewards,
+        rewards_by_task=eval_rewards_by_task,
+        num_eval_tasks=num_eval_tasks,
+        num_scored_groups=len(output_groups),
+        n_per_prompt=eval_n_per_prompt,
+    )
+    metrics.update(
+        {
+            "harbor/eval_num_converted_samples": converted_count,
+            "harbor/eval_num_failed_trials": failed_count,
+            "harbor/eval_num_missing_rollout_details": missing_count,
+            "harbor/eval_num_timed_out_groups": timed_out_groups,
+        }
+    )
+    metrics["harbor/eval_metrics_artifact_written"] = 1
+    metrics_path = _write_eval_metrics_artifact(args, rollout_id, metrics)
+    logger.info("Harbor eval metrics artifact: %s", metrics_path)
+
+    return {
+        "eval": {
+            "rewards": eval_rewards,
+            "truncated": eval_truncated,
+            "samples": final_samples,
+        },
+        "metrics": metrics,
+    }
+
+
+def _deduplicate_eval_trajectory_outcomes(
+    output_groups: list[list[Sample]],
+) -> tuple[list[float], list[bool]]:
+    """Return exactly one reward/truncation outcome per Harbor trial trajectory.
+
+    Conversion modes such as ``trajectory_retokenized`` split one trial into
+    multiple training chunks. All chunks share ``_trajectory_key`` and verifier
+    reward, so benchmark metrics must count the key once rather than count chunks.
+    """
+    rewards: list[float] = []
+    truncated: list[bool] = []
+    for group in output_groups:
+        by_trajectory: dict[tuple[Any, Any, Any], list[Sample]] = {}
+        for sample in group:
+            by_trajectory.setdefault(_trajectory_key(sample), []).append(sample)
+        for key, chunks in by_trajectory.items():
+            chunk_rewards = [float(sample.reward) for sample in chunks]
+            first_reward = chunk_rewards[0]
+            if any(abs(value - first_reward) > 1e-8 for value in chunk_rewards[1:]):
+                logger.warning(
+                    "Inconsistent verifier rewards across converted chunks for trajectory %s: %s; "
+                    "using max reward for benchmark accounting.",
+                    key,
+                    chunk_rewards,
+                )
+                first_reward = max(chunk_rewards)
+            rewards.append(first_reward)
+            truncated.append(any(sample.status == Sample.Status.TRUNCATED for sample in chunks))
+    return rewards, truncated
+
+def _group_eval_trajectory_rewards_by_task(
+    output_groups: list[list[Sample]], *, n_per_prompt: int | None = None
+) -> list[list[float | None]]:
+    """Return rank-aligned attempt rewards for each scored eval task.
+
+    Missing ranks are represented by ``None``. This matters for the pass@1
+    diagnostic: if rank 0 timed out but rank 1 returned, rank 1 must not be
+    mislabeled as the first attempt.
+    """
+    grouped: list[list[float | None]] = []
+    for group in output_groups:
+        by_trajectory: dict[tuple[Any, Any, Any], list[Sample]] = {}
+        for sample in group:
+            by_trajectory.setdefault(_trajectory_key(sample), []).append(sample)
+        ranked: dict[int, float] = {}
+        for key, chunks in by_trajectory.items():
+            chunk_rewards = [float(sample.reward) for sample in chunks]
+            reward = chunk_rewards[0]
+            if any(abs(value - reward) > 1e-8 for value in chunk_rewards[1:]):
+                reward = max(chunk_rewards)
+            try:
+                rank = int(key[2])
+            except (TypeError, ValueError):
+                rank = len(ranked)
+            ranked[rank] = reward
+        if ranked:
+            size = max(int(n_per_prompt or 0), max(ranked) + 1)
+            task_rewards: list[float | None] = [None] * size
+            for rank, reward in ranked.items():
+                if 0 <= rank < size:
+                    task_rewards[rank] = reward
+            grouped.append(task_rewards)
+    return grouped
+
+
+def _compute_eval_count_metrics(
+    *,
+    rewards: list[float],
+    num_eval_tasks: int,
+    num_scored_groups: int,
+    n_per_prompt: int,
+    rewards_by_task: list[list[float | None]] | None = None,
+) -> dict[str, Any]:
+    """Build task-level pass@k metrics plus attempt-level diagnostics.
+
+    Terminal-Bench pass@k resolves a *task* when at least one of its ``k``
+    independent attempts succeeds.  Missing/timed-out tasks remain failures in
+    the full-set denominator.  ``harbor/eval_resolved_rate_full`` is therefore
+    always ``resolved_tasks / num_eval_tasks`` rather than resolved attempts
+    divided by ``num_eval_tasks * k``.
+
+    ``rewards`` contains one reward per scored attempt. ``rewards_by_task``
+    preserves task boundaries after retokenized chunks have been deduplicated.
+    For the legacy/default k=1 path it may be omitted.
+    """
+    n_per_prompt = max(int(n_per_prompt or 1), 1)
+    if rewards_by_task is None:
+        if n_per_prompt != 1:
+            raise ValueError("rewards_by_task is required for task-level pass@k when k > 1")
+        rewards_by_task = [[float(reward)] for reward in rewards]
+
+    scored_task_rewards = [
+        max(float(reward) for reward in task_rewards if reward is not None)
+        for task_rewards in rewards_by_task
+        if any(reward is not None for reward in task_rewards)
+    ]
+    num_scored_tasks = len(scored_task_rewards)
+    num_resolved = sum(1 for reward in scored_task_rewards if reward >= 0.5)
+    num_unresolved = num_scored_tasks - num_resolved
+    num_resolved_attempts = sum(1 for reward in rewards if reward >= 0.5)
+
+    # First-attempt (rank-0) resolves = pass@1 task count. Computed here so that
+    # harbor/eval_num_resolved can report the pass@1 count (per user request),
+    # while the pass@k / avg@k rates below still use their own derivations.
+    first_attempt_rewards = [
+        task_rewards[0] if task_rewards and task_rewards[0] is not None else 0.0
+        for task_rewards in rewards_by_task
+    ]
+    first_attempt_resolved = sum(1 for reward in first_attempt_rewards if reward >= 0.5)
+
+    metrics: dict[str, Any] = {
+        "harbor/eval_pass_at_k": n_per_prompt,
+        "harbor/eval_num_tasks": num_eval_tasks,
+        "harbor/eval_num_groups": num_scored_groups,
+        "harbor/eval_num_samples": len(rewards),
+        "harbor/eval_num_scored_tasks": num_scored_tasks,
+        # pass@1 task count (rank-0 attempt resolves). This is NOT the pass@k count;
+        # the pass@k resolved-task count is exposed separately below.
+        "harbor/eval_num_resolved": first_attempt_resolved,
+        "harbor/eval_num_unresolved": num_eval_tasks - first_attempt_resolved,
+        # pass@k (any-of-k) resolved/unresolved task counts, kept under explicit names.
+        "harbor/eval_num_resolved_pass_at_k": num_resolved,
+        "harbor/eval_num_unresolved_pass_at_k": num_unresolved,
+        "harbor/eval_num_resolved_attempts": num_resolved_attempts,
+        "harbor/eval_num_unresolved_attempts": len(rewards) - num_resolved_attempts,
+        "harbor/eval_num_unscored_tasks": max(num_eval_tasks - num_scored_tasks, 0),
+        "harbor/eval_num_missing_attempts": max(num_eval_tasks * n_per_prompt - len(rewards), 0),
+        "harbor/eval_attempt_coverage": (
+            len(rewards) / (num_eval_tasks * n_per_prompt)
+            if num_eval_tasks > 0 and n_per_prompt > 0
+            else 0.0
+        ),
+    }
+    pass_at_1_full = first_attempt_resolved / num_eval_tasks if num_eval_tasks > 0 else 0.0
+    pass_at_k_full = num_resolved / num_eval_tasks if num_eval_tasks > 0 else 0.0
+    avg_at_k_full = (
+        num_resolved_attempts / (num_eval_tasks * n_per_prompt)
+        if num_eval_tasks > 0 and n_per_prompt > 0
+        else 0.0
+    )
+    # User-facing Terminal-Bench full-set metrics. Missing tasks/attempts are
+    # failures because all denominators are the expected fixed benchmark size.
+    metrics["harbor/eval_resolved_rate_full_pass@1"] = pass_at_1_full
+    metrics[f"harbor/eval_resolved_rate_full_pass@{n_per_prompt}"] = pass_at_k_full
+    metrics[f"harbor/eval_resolved_rate_full_avg@{n_per_prompt}"] = avg_at_k_full
+    # Backward-compatible aliases used by existing dashboards/gates.
+    metrics["harbor/eval_pass_at_1_first_attempt_full"] = pass_at_1_full
+    if scored_task_rewards:
+        # Scored-task pass@k; this ignores tasks for which no attempt returned.
+        metrics["harbor/eval_reward_mean"] = num_resolved / num_scored_tasks
+        # Attempt-level mean is retained as a diagnostic and is pass@1-like.
+        metrics["harbor/eval_attempt_reward_mean"] = sum(rewards) / len(rewards) if rewards else 0.0
+        # Official/full benchmark rates: missing tasks count as failures.
+        # NOTE: harbor/eval_resolved_rate_full is intentionally the avg@k value
+        # (mean per-attempt resolve rate over the full k*num_tasks denominator),
+        # per user request -- this is the more accurate headline number. The
+        # pass@1 / pass@k / avg@k values are all still computed and logged under
+        # their own explicit keys (harbor/eval_resolved_rate_full_pass@1 /
+        # _pass@{k} / _avg@{k}); only this generic alias mirrors avg@k.
+        if num_eval_tasks > 0:
+            metrics["harbor/eval_resolved_rate_full"] = avg_at_k_full
+            metrics["harbor/eval_pass_at_k_ge_pass_at_1"] = float(
+                metrics[f"harbor/eval_resolved_rate_full_pass@{n_per_prompt}"] + 1e-12
+                >= metrics["harbor/eval_pass_at_1_first_attempt_full"]
+            )
+    return metrics
+
+def _write_eval_metrics_artifact(args, rollout_id: int, metrics: dict[str, Any]) -> str:
+    """Persist machine-readable eval metrics for the pass@3 acceptance gate."""
+    defaults = getattr(args, "harbor_trial_defaults", {}) or {}
+    trials_dir = defaults.get("trials_dir") if isinstance(defaults, dict) else None
+    path = Path(str(trials_dir or _default_trials_dir(args))) / f"eval_{rollout_id}_metrics.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(metrics, indent=2, sort_keys=True) + "\n")
+    return str(path)
+
+
+async def _run_one_group(
+    args,
+    rollout_id: int,
+    trial_group_index: int,
+    base_group: list[Sample],
+    semaphore: asyncio.Semaphore,
+    *,
+    retry_missing_samples: int,
+) -> tuple[list[Sample], dict[str, int]]:
+    output_group: list[Sample] = []
+    stats = {"converted": 0, "trajectories": 0, "failed": 0, "missing": 0}
+    running_tasks: dict[asyncio.Task, tuple[int, Sample, int]] = {}
+    retry_stride = max(len(base_group), 1)
+    partial_min_units = _partial_group_min_units(args, retry_stride)
+
+    def submit_sample_task(sample_rank: int, base_sample: Sample, attempt: int) -> None:
+        trial_sample_rank = sample_rank + attempt * retry_stride
+        task = asyncio.create_task(
+            _run_one_with_semaphore(
+                args,
+                rollout_id,
+                trial_group_index,
+                trial_sample_rank,
+                base_sample,
+                semaphore,
+            )
+        )
+        running_tasks[task] = (sample_rank, base_sample, attempt)
+
+    for sample_rank, base_sample in enumerate(base_group):
+        submit_sample_task(sample_rank, base_sample, 0)
+
+    try:
+        while running_tasks:
+            done, _ = await asyncio.wait(running_tasks.keys(), return_when=asyncio.FIRST_COMPLETED)
+            for task in done:
+                sample_rank, base_sample, attempt = running_tasks.pop(task)
+                try:
+                    samples = task.result()
+                except Exception as exc:
+                    if getattr(args, "enable_score_centering", False):
+                        # A missing/malformed head must not silently turn into dropped training data.
+                        raise
+                    stats["failed"] += 1
+                    logger.exception("Harbor trial failed for sample index %s", base_sample.index)
+                    if isinstance(exc, HarborTrialWorkersUnavailableError) or getattr(args, "harbor_fail_on_trial_error", False):
+                        raise
+                    samples = []
+                    logger.warning("Dropping failed Harbor rollout sample %s: %s", base_sample.index, exc)
+
+                if samples:
+                    output_group.extend(samples)
+                    stats["converted"] += len(samples)
+                    stats["trajectories"] += 1
+                    continue
+
+                stats["missing"] += 1
+                if attempt < retry_missing_samples:
+                    submit_sample_task(sample_rank, base_sample, attempt + 1)
+
+            if (
+                partial_min_units > 0
+                and running_tasks
+                and _group_unit_count(args, output_group, stats) >= partial_min_units
+            ):
+                stats["partial_cutoff"] = 1
+                stats["partial_min_units"] = partial_min_units
+                stats["cancelled_tail_trials"] = stats.get("cancelled_tail_trials", 0) + len(running_tasks)
+                logger.info(
+                    "Harbor rollout group %s reached partial cutoff %s/%s %s units; "
+                    "cancelling %s tail trial(s).",
+                    trial_group_index,
+                    _group_unit_count(args, output_group, stats),
+                    retry_stride,
+                    _group_unit(args),
+                    len(running_tasks),
+                )
+                for task in running_tasks:
+                    task.cancel()
+                await asyncio.gather(*running_tasks, return_exceptions=True)
+                running_tasks.clear()
+    finally:
+        if running_tasks:
+            for task in running_tasks:
+                task.cancel()
+            await asyncio.gather(*running_tasks, return_exceptions=True)
+
+    return output_group, stats
+
+
+def _require_full_rollout_groups(args) -> bool:
+    value = getattr(args, "harbor_require_full_rollout_groups", None)
+    if value is not None:
+        return bool(value)
+    mode = getattr(args, "harbor_sample_mode", "turn")
+    return mode in {
+        "last_turn",
+        "trajectory",
+        "trajectory_retokenized",
+        "turn_grouped",
+        "step",
+        "step_grouped",
+    } and int(
+        getattr(args, "n_samples_per_prompt", 1) or 1
+    ) > 1
+
+
+def _group_unit(args) -> str:
+    explicit = getattr(args, "harbor_group_unit", None)
+    if explicit:
+        value = str(explicit)
+    elif getattr(args, "harbor_sample_mode", "turn") in {
+        "trajectory_retokenized",
+        "turn_grouped",
+        "step",
+        "step_grouped",
+    }:
+        value = "trajectory"
+    else:
+        value = "sample"
+    if value not in {"sample", "trajectory"}:
+        raise ValueError(f"Unsupported Harbor group unit: {value!r}")
+    return value
+
+
+def _group_unit_count(args, group: list[Sample], group_stats: dict[str, int]) -> int:
+    if _group_unit(args) == "trajectory":
+        return int(group_stats.get("trajectories", _count_unique_trajectories(group)) or 0)
+    return len(group)
+
+
+def _partial_group_min_units(args, target_units: int) -> int:
+    value = getattr(args, "harbor_partial_group_min_units", None)
+    if value is None:
+        value = getattr(args, "harbor_partial_group_min_trajectories", None)
+    if value is None:
+        return 0
+    try:
+        min_units = int(value)
+    except (TypeError, ValueError):
+        return 0
+    if min_units <= 0:
+        return 0
+    return min(max(min_units, 1), max(int(target_units), 1))
+
+
+def _accepts_partial_group(args, group_unit_count: int, target_units: int) -> bool:
+    partial_min_units = _partial_group_min_units(args, target_units)
+    return partial_min_units > 0 and group_unit_count >= partial_min_units
+
+
+def _trajectory_key(sample: Sample) -> tuple[Any, Any, Any]:
+    metadata = getattr(sample, "metadata", None) or {}
+    rollout_id = metadata.get("harbor_rollout_id")
+    group_index = metadata.get("harbor_rollout_group_index", getattr(sample, "group_index", None))
+    sample_rank = metadata.get(
+        "harbor_sample_rank",
+        metadata.get("harbor_trial_sample_rank", getattr(sample, "index", None)),
+    )
+    return rollout_id, group_index, sample_rank
+
+
+def _count_unique_trajectories(samples: list[Sample]) -> int:
+    return len({_trajectory_key(sample) for sample in samples})
+
+
+def _over_sampling_group_window(args, target_groups: int) -> int:
+    value = getattr(args, "over_sampling_batch_size", None)
+    if value is None:
+        return target_groups
+    return max(target_groups, int(value or target_groups))
+
+
+def _max_rollout_group_attempts(args, target_groups: int, over_sampling_groups: int | None = None) -> int:
+    multiplier = int(getattr(args, "harbor_rollout_group_attempt_multiplier", 4) or 4)
+    over_sampling_groups = int(over_sampling_groups or target_groups)
+    return max(target_groups * multiplier, over_sampling_groups * multiplier)
+
+
+def _percentile(values: list[float], percentile: float) -> float:
+    if not values:
+        return 0.0
+    sorted_values = sorted(values)
+    index = max(0, min(len(sorted_values) - 1, math.ceil(len(sorted_values) * percentile / 100) - 1))
+    return sorted_values[index]
+
+
+def _add_latency_metrics(metrics: dict[str, Any], prefix: str, values: list[float]) -> None:
+    if not values:
+        return
+    metrics[f"{prefix}_mean_seconds"] = sum(values) / len(values)
+    metrics[f"{prefix}_p95_seconds"] = _percentile(values, 95)
+    metrics[f"{prefix}_p99_seconds"] = _percentile(values, 99)
+    metrics[f"{prefix}_max_seconds"] = max(values)
+
+
+def _validate_rollout_logprobs(args, samples: list[Sample]) -> None:
+    if not getattr(args, "use_rollout_logprobs", False):
+        return
+    missing = []
+    for sample in samples:
+        rollout_log_probs = getattr(sample, "rollout_log_probs", None)
+        response_length = int(getattr(sample, "response_length", 0) or 0)
+        if rollout_log_probs is None or len(rollout_log_probs) != response_length:
+            missing.append(sample.index)
+    if missing:
+        preview = ", ".join(str(index) for index in missing[:10])
+        raise RuntimeError(
+            "Harbor rollout produced samples without complete rollout_log_probs while "
+            f"`--use-rollout-logprobs` is enabled. bad_samples={len(missing)}, preview=[{preview}]"
+        )
+
+
+def _add_sample_health_metrics(metrics: dict[str, Any], samples: list[Sample]) -> None:
+    total = len(samples)
+    if total == 0:
+        return
+
+    status_counts: dict[str, int] = {}
+    for sample in samples:
+        status = getattr(sample, "status", None)
+        status_value = getattr(status, "value", str(status))
+        status_counts[status_value] = status_counts.get(status_value, 0) + 1
+    for status_value, count in status_counts.items():
+        metrics[f"harbor/status_{status_value}_samples"] = count
+        metrics[f"harbor/status_{status_value}_sample_ratio"] = count / total
+
+    truncated = status_counts.get(Sample.Status.TRUNCATED.value, 0)
+    metrics["harbor/trial_timeout_samples"] = truncated
+    metrics["harbor/trial_timeout_ratio"] = truncated / total
+
+    length_finish_turns = 0
+    turn_count = 0
+    last_turn_length_finish = 0
+    any_turn_length_finish = 0
+    logprob_samples = 0
+    logprob_tokens = 0
+    response_tokens = 0
+    trimmed_samples = 0
+    response_trimmed_samples = 0
+    response_trimmed_tokens = 0
+    max_original_total_length = 0
+    max_trimmed_total_length = 0
+
+    for sample in samples:
+        metadata = getattr(sample, "metadata", None) or {}
+        sample_length_finish_turns = int(metadata.get("harbor_length_finish_turns", 0) or 0)
+        sample_turn_count = int(metadata.get("harbor_num_turns", 0) or 0)
+        length_finish_turns += sample_length_finish_turns
+        turn_count += sample_turn_count
+        if metadata.get("harbor_finish_reason_type") == "length":
+            last_turn_length_finish += 1
+        if sample_length_finish_turns > 0:
+            any_turn_length_finish += 1
+
+        response_length = int(getattr(sample, "response_length", 0) or 0)
+        response_tokens += response_length
+        rollout_log_probs = getattr(sample, "rollout_log_probs", None)
+        if rollout_log_probs is not None and len(rollout_log_probs) == response_length:
+            logprob_samples += 1
+            logprob_tokens += response_length
+
+        if "harbor_trimmed_total_length" in metadata:
+            trimmed_samples += 1
+            trimmed_response_tokens = int(metadata.get("harbor_response_trimmed_tokens", 0) or 0)
+            response_trimmed_tokens += trimmed_response_tokens
+            if trimmed_response_tokens > 0:
+                response_trimmed_samples += 1
+            max_original_total_length = max(
+                max_original_total_length, int(metadata.get("harbor_original_total_length", 0) or 0)
+            )
+            max_trimmed_total_length = max(
+                max_trimmed_total_length, int(metadata.get("harbor_trimmed_total_length", 0) or 0)
+            )
+
+    metrics["harbor/step_length_finish_turns"] = length_finish_turns
+    metrics["harbor/step_length_finish_turn_ratio"] = length_finish_turns / turn_count if turn_count else 0.0
+    metrics["harbor/step_length_finish_sample_ratio"] = last_turn_length_finish / total
+    metrics["harbor/any_step_length_finish_sample_ratio"] = any_turn_length_finish / total
+    metrics["harbor/rollout_logprob_samples"] = logprob_samples
+    metrics["harbor/rollout_logprob_sample_ratio"] = logprob_samples / total
+    metrics["harbor/rollout_logprob_token_ratio"] = logprob_tokens / response_tokens if response_tokens else 0.0
+    metrics["harbor/train_context_trimmed_samples"] = trimmed_samples
+    metrics["harbor/train_context_trimmed_sample_ratio"] = trimmed_samples / total
+    metrics["harbor/train_response_trimmed_samples"] = response_trimmed_samples
+    metrics["harbor/train_response_trimmed_sample_ratio"] = response_trimmed_samples / total
+    metrics["harbor/train_response_trimmed_tokens"] = response_trimmed_tokens
+    metrics["harbor/train_context_max_original_total_length"] = max_original_total_length
+    metrics["harbor/train_context_max_trimmed_total_length"] = max_trimmed_total_length
+
+    _add_trajectory_shape_metrics(metrics, samples)
+
+
+def _add_trajectory_shape_metrics(metrics: dict[str, Any], samples: list[Sample]) -> None:
+    """Per-trajectory rollout shape: avg turns, avg output tokens/turn, summary rate.
+
+    These are TRAJECTORY-level facts (turn count, total agent output tokens, and
+    Terminus2 summarization count), not sample-level ones. In modes like
+    ``trajectory_retokenized`` a single trajectory is emitted as several
+    chunk-samples that all carry the SAME trajectory-level metadata, so we dedup by
+    ``_trajectory_key`` first — otherwise a long trajectory (more chunks) would be
+    over-weighted in the averages. ``harbor_summarization_count`` is only present
+    when the Terminus2 agent recorded it (it always does when summarization is
+    enabled), so the summary-trigger ratio is computed over the trajectories that
+    reported a count, and is the fraction whose count > 0.
+    """
+    turns_by_trajectory: dict[tuple[Any, Any, Any], int] = {}
+    output_tokens_by_trajectory: dict[tuple[Any, Any, Any], int] = {}
+    summarization_by_trajectory: dict[tuple[Any, Any, Any], int] = {}
+
+    for sample in samples:
+        metadata = getattr(sample, "metadata", None) or {}
+        key = _trajectory_key(sample)
+
+        num_turns = int(metadata.get("harbor_num_turns", 0) or 0)
+        if num_turns > 0:
+            turns_by_trajectory[key] = num_turns
+
+        if "harbor_total_output_tokens" in metadata:
+            output_tokens_by_trajectory[key] = int(metadata.get("harbor_total_output_tokens", 0) or 0)
+
+        if "harbor_summarization_count" in metadata:
+            summarization_by_trajectory[key] = int(metadata.get("harbor_summarization_count", 0) or 0)
+
+    num_trajectories = len(turns_by_trajectory)
+    metrics["harbor/num_unique_trajectories"] = num_trajectories
+
+    if turns_by_trajectory:
+        total_turns = sum(turns_by_trajectory.values())
+        metrics["harbor/avg_turns_per_trajectory"] = total_turns / num_trajectories
+        # Token-weighted mean output length per turn across the rollout: total agent
+        # output tokens / total turns. Only count trajectories that reported both.
+        shared = output_tokens_by_trajectory.keys() & turns_by_trajectory.keys()
+        shared_turns = sum(turns_by_trajectory[key] for key in shared)
+        shared_output_tokens = sum(output_tokens_by_trajectory[key] for key in shared)
+        if shared_turns:
+            metrics["harbor/avg_output_tokens_per_turn"] = shared_output_tokens / shared_turns
+        if shared:
+            metrics["harbor/avg_output_tokens_per_trajectory"] = shared_output_tokens / len(shared)
+
+    if summarization_by_trajectory:
+        reported = len(summarization_by_trajectory)
+        triggered = sum(1 for count in summarization_by_trajectory.values() if count > 0)
+        total_summaries = sum(summarization_by_trajectory.values())
+        metrics["harbor/summarization_trajectories_reported"] = reported
+        metrics["harbor/summarization_triggered_trajectory_ratio"] = triggered / reported
+        metrics["harbor/avg_summarization_count_per_trajectory"] = total_summaries / reported
+
+
+def _apply_rollout_sample_hooks(args, output_groups: list[list[Sample]], data_source) -> None:
+    if args.rollout_sample_filter_path is not None:
+        filter_func = load_function(args.rollout_sample_filter_path)
+        filter_func(args, output_groups)
+
+    if args.rollout_all_samples_process_path is not None:
+        process_func = load_function(args.rollout_all_samples_process_path)
+        process_func(args, output_groups, data_source)
+
+
+async def _run_one_with_semaphore(
+    args,
+    rollout_id: int,
+    group_index: int,
+    sample_rank: int,
+    base_sample: Sample,
+    semaphore: asyncio.Semaphore,
+) -> list[Sample]:
+    global _worker_cycle, _worker_cycle_len, _worker_cycle_fingerprint
+
+    workers = list(getattr(args, "_harbor_trial_workers", None) or [])
+
+    async with semaphore:
+        # Pace Daytona sandbox creation to stay under the per-org .create() rate
+        # limit (default 600/min). One token per trial dispatch == one create.
+        # No-op unless harbor_create_rate_per_sec is set. Held inside the
+        # concurrency semaphore so the in-flight cap and the rate cap compose.
+        rate_limiter = _get_create_rate_limiter(args)
+        if rate_limiter is not None:
+            await rate_limiter.acquire()
+
+        if not workers:
+            fallback_default = not bool(getattr(args, "harbor_trial_node_spread", False))
+            if not bool(getattr(args, "harbor_fallback_to_inprocess_trials", fallback_default)):
+                raise RuntimeError(
+                    "Harbor trial node-spread is enabled but no TrialWorkers are available, and "
+                    "in-process fallback is disabled. Check rollout auxiliary worker startup logs."
+                )
+            return await _run_one_trial(args, rollout_id, group_index, sample_rank, base_sample)
+
+        # lazy-import ray exceptions to avoid hard dep when running in-process
+        try:
+            import ray
+            from ray.exceptions import RayActorError
+        except ImportError:
+            return await _run_one_trial(args, rollout_id, group_index, sample_rank, base_sample)
+
+        worker_fingerprint = tuple(id(worker) for worker in workers)
+        if _worker_cycle is None or _worker_cycle_fingerprint != worker_fingerprint:
+            _worker_cycle = itertools.cycle(range(len(workers)))
+            _worker_cycle_len = len(workers)
+            _worker_cycle_fingerprint = worker_fingerprint
+
+        last_error: Exception | None = None
+        remote_timeout = _float_arg(args, "harbor_trial_remote_timeout_sec", 0.0)
+        for _ in range(len(workers)):
+            worker = workers[next(_worker_cycle)]
+            try:
+                if getattr(args, "_sc_eval_dispatch", False) or getattr(args, "_tb_gae_eval_dispatch", False):
+                    # Existing TrialWorkers hold training args. Feature-enabled
+                    # jobs need an override to keep evaluation on its own path.
+                    evaluation_overrides = {
+                        "enable_score_centering": False,
+                        "harbor_trial_name_template": args.harbor_trial_name_template,
+                        "rollout_temperature": args.rollout_temperature,
+                        "rollout_top_p": args.rollout_top_p,
+                        "rollout_top_k": args.rollout_top_k,
+                    }
+                    if getattr(args, "_tb_gae_eval_dispatch", False):
+                        evaluation_overrides["enable_tb_gae"] = False
+                    ref = worker.run_trial.remote(
+                        rollout_id,
+                        group_index,
+                        sample_rank,
+                        base_sample,
+                        evaluation_overrides=evaluation_overrides,
+                    )
+                else:
+                    ref = worker.run_trial.remote(rollout_id, group_index, sample_rank, base_sample)
+            except RayActorError as exc:
+                last_error = exc
+                logger.warning(
+                    "TrialWorker died for sample %s; trying next worker.", base_sample.index
+                )
+                continue
+
+            future = asyncio.wrap_future(ref.future())
+            try:
+                if remote_timeout > 0:
+                    return await asyncio.wait_for(future, timeout=remote_timeout)
+                return await future
+            except asyncio.CancelledError:
+                try:
+                    ray.cancel(ref, force=False)
+                except Exception:
+                    logger.exception("Failed to cancel over-sampled TrialWorker task for sample %s", base_sample.index)
+                raise
+            except RayActorError as exc:
+                last_error = exc
+                logger.warning(
+                    "TrialWorker died for sample %s; trying next worker.", base_sample.index
+                )
+                continue
+            except asyncio.TimeoutError as exc:
+                last_error = exc
+                logger.warning(
+                    "TrialWorker remote call timed out after %.1fs for sample %s; "
+                    "cancelling the Ray task and trying next worker.",
+                    remote_timeout,
+                    base_sample.index,
+                )
+                try:
+                    ray.cancel(ref, force=False)
+                except Exception:
+                    logger.exception("Failed to cancel timed-out TrialWorker task for sample %s", base_sample.index)
+                continue
+
+        fallback_default = not bool(getattr(args, "harbor_trial_node_spread", False))
+        if not bool(getattr(args, "harbor_fallback_to_inprocess_trials", fallback_default)):
+            raise HarborTrialWorkersUnavailableError(
+                "All Harbor TrialWorkers are unavailable and in-process fallback is disabled. "
+                "This avoids moving high-concurrency Apptainer trials onto the RolloutManager node."
+            )
+        logger.warning(
+            "All TrialWorkers unavailable (last error: %s); falling back to in-process trial.",
+            last_error,
+        )
+        return await _run_one_trial(args, rollout_id, group_index, sample_rank, base_sample)
+
+
+async def _run_one_trial(args, rollout_id: int, group_index: int, sample_rank: int, base_sample: Sample) -> list[Sample]:
+    ensure_harbor_distribution_metadata()
+    # Both Daytona proxy hops are required on this cluster: the API/control
+    # plane (urllib3, ignores proxy env vars) and the obstore/S3 upload.
+    ensure_daytona_api_proxy()
+    ensure_daytona_s3_proxy()
+    try:
+        from harbor.trial.trial import Trial
+    except ImportError as exc:
+        raise ImportError(
+            "Harbor is required for slime_plugins.harbor rollout. Add harbor/src to PYTHONPATH "
+            "or install Harbor in the slime runtime environment."
+        ) from exc
+
+    trial_config = _build_trial_config(args, rollout_id, group_index, sample_rank, base_sample)
+    trial = await Trial.create(trial_config)
+    result = await trial.run()
+
+    mode = getattr(args, "harbor_sample_mode", "turn")
+    reward_key = getattr(args, "harbor_reward_key", "reward")
+    include_subagents = bool(getattr(args, "harbor_include_subagent_rollouts", False))
+    metadata = {
+        "harbor_rollout_id": rollout_id,
+        "harbor_rollout_group_index": group_index,
+        "harbor_trial_sample_rank": sample_rank,
+        "harbor_base_group_index": getattr(base_sample, "group_index", None),
+        "harbor_base_sample_index": getattr(base_sample, "index", None),
+    }
+    if "harbor_sample_rank" not in (getattr(base_sample, "metadata", None) or {}):
+        metadata["harbor_sample_rank"] = sample_rank
+    sc_conversion_kwargs = {}
+    if getattr(args, "enable_score_centering", False) and not _is_eval_args(args):
+        sc_conversion_kwargs["score_centering_top_k"] = args.sc_top_k
+    if getattr(args, "enable_tb_gae", False) is True and not _is_eval_args(args):
+        sc_conversion_kwargs["enable_tb_gae"] = True
+    try:
+        samples = samples_from_trial_result(
+            result,
+            base_sample,
+            reward_key=reward_key,
+            mode=mode,
+            include_subagents=include_subagents,
+            metadata=metadata,
+            require_routing_replay=bool(getattr(args, "use_rollout_routing_replay", False)),
+            **sc_conversion_kwargs,
+        )
+    except RolloutConversionError:
+        if getattr(args, "harbor_fail_on_conversion_error", True):
+            raise
+        logger.exception("Failed to convert Harbor trial result to slime samples.")
+        return []
+
+    _dump_case_study(
+        args,
+        rollout_id=rollout_id,
+        group_index=group_index,
+        sample_rank=sample_rank,
+        base_sample=base_sample,
+        result=result,
+        trial_config=trial_config,
+        samples=samples,
+        reward_key=reward_key,
+        mode=mode,
+        include_subagents=include_subagents,
+        metadata=metadata,
+    )
+    return samples
+
+
+def _dump_case_study(
+    args,
+    *,
+    rollout_id: int,
+    group_index: int,
+    sample_rank: int,
+    base_sample: Sample,
+    result: Any,
+    trial_config: Any,
+    samples: list[Sample],
+    reward_key: str,
+    mode: str,
+    include_subagents: bool,
+    metadata: dict[str, Any],
+) -> None:
+    dump_root = getattr(args, "harbor_case_study_dump_dir", None)
+    if not dump_root:
+        return
+
+    max_cases = int(getattr(args, "harbor_case_study_max_cases", 0) or 0)
+    case_ordinal = group_index * max(1, int(getattr(args, "n_samples_per_prompt", 1) or 1)) + sample_rank
+    if max_cases > 0 and case_ordinal >= max_cases:
+        return
+
+    sample_index = str(getattr(base_sample, "index", "none")).replace("/", "_")
+    case_dir = Path(dump_root) / f"rollout_{rollout_id}" / f"g{group_index:04d}_s{sample_rank:04d}_i{sample_index}"
+    case_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        explanation = explain_trial_result_conversion(
+            result,
+            base_sample,
+            reward_key=reward_key,
+            mode=mode,
+            include_subagents=include_subagents,
+            metadata=metadata,
+            converted_samples=samples,
+        )
+        _write_json(case_dir / "conversion.json", explanation)
+        _write_json(case_dir / "samples.json", [sample.to_dict() for sample in samples])
+        _write_json(case_dir / "trial_config.json", _json_ready(trial_config))
+        _write_json(case_dir / "trial_result.json", _json_ready(result))
+        _copy_case_study_trial_files(args, result=result, trial_config=trial_config, case_dir=case_dir)
+    except Exception:
+        logger.warning("Failed to write Harbor case-study dump to %s", case_dir, exc_info=True)
+
+
+def _copy_case_study_trial_files(args, *, result: Any, trial_config: Any, case_dir: Path) -> None:
+    trial_dir = _trial_dir_from_result_or_config(result, trial_config)
+    manifest: dict[str, Any] = {
+        "trial_dir": str(trial_dir) if trial_dir is not None else None,
+        "copied": [],
+        "skipped": [],
+    }
+    if trial_dir is None or not trial_dir.exists():
+        manifest["error"] = "trial_dir_not_found"
+        _write_json(case_dir / "raw_trial_manifest.json", manifest)
+        return
+
+    max_bytes = int(getattr(args, "harbor_case_study_max_file_bytes", 25_000_000) or 0)
+    raw_dir = case_dir / "raw_trial"
+    raw_dir.mkdir(parents=True, exist_ok=True)
+
+    for src in sorted(trial_dir.rglob("*")):
+        if not src.is_file():
+            continue
+        rel = src.relative_to(trial_dir)
+        try:
+            size = src.stat().st_size
+        except OSError as exc:
+            manifest["skipped"].append({"path": str(rel), "reason": f"stat_failed: {exc}"})
+            continue
+        if max_bytes > 0 and size > max_bytes:
+            manifest["skipped"].append({"path": str(rel), "size": size, "reason": "file_too_large"})
+            continue
+
+        dst = raw_dir / rel
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            shutil.copy2(src, dst)
+            manifest["copied"].append({"path": str(rel), "size": size})
+        except OSError as exc:
+            manifest["skipped"].append({"path": str(rel), "size": size, "reason": f"copy_failed: {exc}"})
+
+    _write_json(case_dir / "raw_trial_manifest.json", manifest)
+
+
+def _trial_dir_from_result_or_config(result: Any, trial_config: Any) -> Path | None:
+    trial_uri = _get_attr_or_item_local(result, "trial_uri")
+    if trial_uri:
+        parsed = urlparse(str(trial_uri))
+        if parsed.scheme == "file":
+            return Path(unquote(parsed.path))
+        if parsed.scheme == "":
+            return Path(str(trial_uri))
+
+    trials_dir = _get_attr_or_item_local(trial_config, "trials_dir")
+    trial_name = _get_attr_or_item_local(trial_config, "trial_name")
+    if trials_dir and trial_name:
+        return Path(trials_dir) / str(trial_name)
+    return None
+
+
+def _get_attr_or_item_local(obj: Any, key: str, default: Any = None) -> Any:
+    if obj is None:
+        return default
+    if isinstance(obj, dict):
+        return obj.get(key, default)
+    return getattr(obj, key, default)
+
+
+def _write_json(path: Path, payload: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as f:
+        json.dump(_json_ready(payload), f, ensure_ascii=False, indent=2)
+        f.write("\n")
+
+
+def _json_ready(value: Any) -> Any:
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, Sample.Status):
+        return value.value
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, dict):
+        return {str(key): _json_ready(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_json_ready(item) for item in value]
+    if hasattr(value, "to_dict"):
+        try:
+            return _json_ready(value.to_dict())
+        except Exception:
+            return str(value)
+    if hasattr(value, "model_dump"):
+        try:
+            return _json_ready(value.model_dump(mode="json"))
+        except Exception:
+            return str(value)
+    if hasattr(value, "__dict__"):
+        try:
+            return _json_ready(vars(value))
+        except Exception:
+            return str(value)
+    return str(value)
+
+
+def _build_trial_config(args, rollout_id: int, group_index: int, sample_rank: int, base_sample: Sample):
+    ensure_harbor_distribution_metadata()
+    ensure_daytona_api_proxy()
+    ensure_daytona_s3_proxy()
+    from harbor.models.trial.config import TrialConfig
+
+    entry = copy.deepcopy(base_sample.metadata.get("harbor_task_entry", {}))
+    if not entry:
+        entry = copy.deepcopy(base_sample.metadata.get("harbor", {}))
+    if not entry:
+        raise ValueError("Sample metadata must contain `harbor_task_entry` or `harbor`.")
+
+    config_dict = copy.deepcopy(getattr(args, "harbor_trial_defaults", {}) or {})
+    entry_trial_config = copy.deepcopy(entry.get("trial_config", {}))
+    if entry_trial_config:
+        config_dict = _deep_merge(config_dict, entry_trial_config)
+    if "task" in entry:
+        config_dict = _deep_merge(config_dict, {"task": entry["task"]})
+    if "agent" in entry:
+        config_dict = _deep_merge(config_dict, {"agent": entry["agent"]})
+    if "environment" in entry:
+        config_dict = _deep_merge(config_dict, {"environment": entry["environment"]})
+    if "verifier" in entry:
+        config_dict = _deep_merge(config_dict, {"verifier": entry["verifier"]})
+
+    if "task" not in config_dict:
+        raise ValueError("Harbor trial config requires a `task` section.")
+
+    config_dict.setdefault("trials_dir", _default_trials_dir(args))
+    config_dict["trial_name"] = _trial_name(args, rollout_id, group_index, sample_rank, base_sample, config_dict)
+
+    # Turn-budget curriculum. Applied AFTER the task-entry merges above so it wins
+    # over the static YAML default, but BEFORE _set_default_agent_config (which only
+    # uses setdefault and would therefore not override an explicit value).
+    # Deliberately skipped for eval: the eval turn budget must stay constant or the
+    # pass-rate series is not comparable across steps.
+    curriculum_turns = _curriculum_max_turns(args, rollout_id)
+    if curriculum_turns is not None and not _is_eval_args(args):
+        agent_cfg = config_dict.setdefault("agent", {})
+        agent_kwargs = agent_cfg.setdefault("kwargs", {})
+        previous = agent_kwargs.get("max_turns")
+        agent_kwargs["max_turns"] = curriculum_turns
+        _log_curriculum_max_turns(rollout_id, curriculum_turns, previous)
+
+    _set_default_agent_config(args, config_dict)
+    _set_default_environment_config(args, config_dict)
+
+    return TrialConfig.model_validate(config_dict)
+
+
+def _set_default_agent_config(args, config_dict: dict[str, Any]) -> None:
+    agent = config_dict.setdefault("agent", {})
+    agent.setdefault("import_path", getattr(args, "harbor_agent_import_path", "slime_plugins.harbor.agent:SlimeTerminus2"))
+    agent.setdefault("model_name", getattr(args, "harbor_model_name", "slime-policy"))
+    kwargs = agent.setdefault("kwargs", {})
+    kwargs.setdefault("collect_rollout_details", True)
+    kwargs.setdefault("enable_summarize", False)
+    kwargs.setdefault("record_terminal_session", False)
+    kwargs.setdefault("llm_backend", getattr(args, "harbor_llm_backend", "slime_sglang"))
+    llm_kwargs = kwargs.setdefault("llm_kwargs", {})
+    llm_kwargs.setdefault("model_name", agent.get("model_name") or "slime-policy")
+    llm_kwargs.setdefault("hf_checkpoint", args.hf_checkpoint)
+    llm_kwargs.setdefault("router_url", _router_url(args))
+    if getattr(args, "enable_tb_gae", False) is True and not _is_eval_args(args):
+        from slime_plugins.harbor.tb_gae_termination import configure_termination_producer
+
+        configure_termination_producer(agent)
+    if getattr(args, "enable_score_centering", False) and not _is_eval_args(args):
+        from slime.utils.score_centering_validate import validate_score_centering_args
+
+        validate_score_centering_args(args)
+        required_sc = {
+            "score_centering_top_k": args.sc_top_k,
+            "score_centering_wire_format": args.sc_wire_format,
+            "score_centering_max_response_bytes": args.sc_max_response_bytes,
+            "score_centering_max_trial_bytes": args.sc_max_trial_bytes,
+        }
+        for key, value in required_sc.items():
+            if key in llm_kwargs and llm_kwargs[key] != value:
+                raise ValueError(f"Harbor llm_kwargs conflicts with SC configuration: {key}")
+            llm_kwargs[key] = value
+        if kwargs.get("collect_rollout_details") is not True:
+            raise ValueError("SC requires collect_rollout_details=True")
+        if kwargs.get("llm_backend") != "slime_sglang":
+            raise ValueError("SC requires Harbor slime_sglang backend")
+    llm_kwargs.setdefault("temperature", getattr(args, "rollout_temperature", None))
+    llm_kwargs.setdefault("top_p", getattr(args, "rollout_top_p", 1.0))
+    llm_kwargs.setdefault("top_k", getattr(args, "rollout_top_k", -1))
+    llm_kwargs.setdefault("max_new_tokens", getattr(args, "rollout_max_response_len", 1024))
+    llm_kwargs.setdefault("stop", getattr(args, "rollout_stop", None))
+    llm_kwargs.setdefault("stop_token_ids", getattr(args, "rollout_stop_token_ids", None))
+    if getattr(args, "harbor_sample_mode", "turn") == "trajectory_retokenized":
+        llm_kwargs.setdefault("record_rollout_text", True)
+    if getattr(args, "use_rollout_routing_replay", False):
+        llm_kwargs.setdefault("use_rollout_routing_replay", True)
+        llm_kwargs.setdefault("num_layers", getattr(args, "num_layers", None))
+        llm_kwargs.setdefault("moe_router_topk", getattr(args, "moe_router_topk", None))
+    if (max_context_tokens := getattr(args, "rollout_max_context_len", None)) is not None:
+        llm_kwargs.setdefault("max_context_tokens", max_context_tokens)
+
+
+def _set_default_environment_config(args, config_dict: dict[str, Any]) -> None:
+    environment = config_dict.setdefault("environment", {})
+    if environment.get("type") is None and environment.get("import_path") is None:
+        environment["type"] = getattr(args, "harbor_environment_type", "singularity")
+    if _is_singularity_environment_config(environment):
+        kwargs = environment.setdefault("kwargs", {})
+        if image_cache_dir := getattr(args, "harbor_singularity_image_cache_dir", None):
+            kwargs.setdefault("singularity_image_cache_dir", image_cache_dir)
+        if no_mount := getattr(args, "harbor_singularity_no_mount", None):
+            kwargs.setdefault("singularity_no_mount", no_mount)
+
+
+def _is_singularity_environment_config(environment: dict[str, Any]) -> bool:
+    env_type = environment.get("type")
+    if env_type is not None:
+        return str(getattr(env_type, "value", env_type)).lower() == "singularity"
+
+    import_path = str(environment.get("import_path") or "").lower()
+    return "singularity" in import_path
+
+
+def _default_trials_dir(args) -> str:
+    if trials_dir := getattr(args, "harbor_trials_dir", None):
+        return str(trials_dir)
+    save_dir = getattr(args, "save", None) or "."
+    return str(Path(save_dir) / "harbor_trials")
+
+
+def _trial_name(
+    args,
+    rollout_id: int,
+    group_index: int,
+    sample_rank: int,
+    base_sample: Sample,
+    config_dict: dict[str, Any],
+) -> str:
+    template = getattr(args, "harbor_trial_name_template", None)
+    if template:
+        return template.format(
+            rollout_id=rollout_id,
+            group_index=group_index,
+            sample_rank=sample_rank,
+            sample_index=base_sample.index,
+        )
+    if config_dict.get("trial_name"):
+        return str(config_dict["trial_name"])
+    return f"slime-r{rollout_id}-g{group_index}-s{sample_rank}-i{base_sample.index}"
+
+
+def _router_url(args) -> str:
+    return f"http://{args.sglang_router_ip}:{args.sglang_router_port}"
+
+
+def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    result = copy.deepcopy(base)
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(result.get(key), dict):
+            result[key] = _deep_merge(result[key], value)
+        else:
+            result[key] = copy.deepcopy(value)
+    return result

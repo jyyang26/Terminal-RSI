@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Tmax-15k PPO 训练流程 · Qwen3.5-35B-A3B · slime-terminal-RL</title>
+<script>
+  window.MathJax = {
+    tex: { inlineMath: [['$', '$'], ['\\(', '\\)']], displayMath: [['$$', '$$'], ['\\[', '\\]']] },
+    svg: { fontCache: 'global' }
+  };
+</script>
+<script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-svg.js" id="MathJax-script" async></script>
+<style>
+  :root{
+    --bg:#0d1117; --panel:#161b22; --panel2:#1c2333; --border:#30363d;
+    --rollout:#3fb950; --buffer:#d29922; --critic:#a371f7; --actor:#58a6ff; --sync:#f778ba;
+    --txt:#e6edf3; --dim:#8b949e; --accent:#79c0ff;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--txt);font-family:-apple-system,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif;line-height:1.55;padding:0 0 60px}
+  header{padding:22px 30px 14px;border-bottom:1px solid var(--border);background:linear-gradient(180deg,#161b22,#0d1117)}
+  h1{font-size:22px;font-weight:700}
+  h1 .tag{font-size:13px;color:var(--dim);font-weight:400;margin-left:10px}
+  .sub{color:var(--dim);font-size:13px;margin-top:6px}
+  .legend{display:flex;gap:14px;flex-wrap:wrap;margin-top:12px;font-size:12px}
+  .legend span{display:inline-flex;align-items:center;gap:6px}
+  .dot{width:11px;height:11px;border-radius:3px;display:inline-block}
+  .wrap{display:flex;gap:0;max-width:1500px;margin:0 auto}
+  .canvas{flex:1;padding:26px 18px 26px 30px;min-width:0}
+  .side{width:430px;flex-shrink:0;padding:26px 26px 26px 18px;border-left:1px solid var(--border);min-height:80vh}
+
+  /* pipeline */
+  .stage{position:relative;margin:0 0 6px}
+  .node{
+    border:1.5px solid var(--border);border-radius:12px;padding:15px 18px;cursor:pointer;
+    background:var(--panel);transition:.18s;position:relative;overflow:hidden
+  }
+  .node:hover{transform:translateX(4px);border-color:var(--accent)}
+  .node.active{box-shadow:0 0 0 2px var(--accent),0 6px 22px rgba(0,0,0,.5)}
+  .node::before{content:"";position:absolute;left:0;top:0;bottom:0;width:5px;background:var(--c)}
+  .node .nh{display:flex;align-items:center;gap:10px;font-weight:700;font-size:16px}
+  .node .badge{font-size:10.5px;font-weight:600;padding:2px 8px;border-radius:20px;background:var(--c);color:#0d1117;margin-left:auto}
+  .node .nd{color:var(--dim);font-size:12.5px;margin-top:6px}
+  .node .gpu{font-size:11px;color:var(--accent);margin-top:5px;font-family:ui-monospace,monospace}
+
+  .arrow{display:flex;flex-direction:column;align-items:center;color:var(--dim);margin:2px 0;font-size:11px;position:relative;height:34px;justify-content:center}
+  .arrow .line{position:absolute;top:0;bottom:0;width:2px;background:linear-gradient(var(--border),var(--border))}
+  .arrow .lbl{background:var(--bg);padding:2px 8px;border:1px solid var(--border);border-radius:20px;z-index:2;font-family:ui-monospace,monospace;font-size:10.5px}
+  .arrow .pkt{position:absolute;width:9px;height:9px;border-radius:50%;background:var(--accent);top:-4px;box-shadow:0 0 10px var(--accent);opacity:0}
+  body.run .arrow .pkt{animation:flow 2.4s linear infinite}
+  @keyframes flow{0%{top:-4px;opacity:0}10%{opacity:1}90%{opacity:1}100%{top:34px;opacity:0}}
+
+  /* async loop banner */
+  .loopbar{border:1px dashed var(--rollout);border-radius:10px;padding:9px 14px;margin:4px 0 12px;font-size:12px;color:var(--rollout);background:rgba(63,185,80,.06)}
+  .critic-only{border:1px dashed var(--critic);border-radius:10px;padding:8px 13px;margin:8px 0;font-size:11.5px;color:#c9a7ff;background:rgba(163,113,247,.06)}
+
+  /* side panel */
+  .side h2{font-size:15px;margin-bottom:4px;display:flex;align-items:center;gap:8px}
+  .side .stag{font-size:10.5px;padding:2px 9px;border-radius:20px;color:#0d1117;font-weight:700}
+  .side .role{color:var(--dim);font-size:12px;margin:8px 0 14px}
+  .box{background:var(--panel2);border:1px solid var(--border);border-radius:10px;padding:13px 15px;margin-bottom:13px}
+  .box h3{font-size:12.5px;color:var(--accent);margin-bottom:8px;text-transform:uppercase;letter-spacing:.4px}
+  .box p{font-size:13px;margin-bottom:7px}
+  .box code{background:#0d1117;padding:1px 6px;border-radius:5px;font-size:12px;color:#ffa657;font-family:ui-monospace,monospace}
+  .kv{font-size:12px;color:var(--dim);font-family:ui-monospace,monospace;margin:3px 0}
+  .kv b{color:var(--txt)}
+  .eq{overflow-x:auto;padding:4px 0;font-size:14px}
+  .hint{color:var(--dim);font-size:13px;margin-top:40px;text-align:center;padding:30px;border:1px dashed var(--border);border-radius:12px}
+  .controls{display:flex;gap:10px;margin:6px 0 18px}
+  .btn{background:var(--panel);border:1px solid var(--border);color:var(--txt);padding:7px 15px;border-radius:8px;cursor:pointer;font-size:13px;transition:.15s}
+  .btn:hover{border-color:var(--accent);color:var(--accent)}
+  .btn.on{background:var(--accent);color:#0d1117;border-color:var(--accent);font-weight:600}
+  .foot{max-width:1500px;margin:20px auto 0;padding:0 30px;color:var(--dim);font-size:11.5px}
+  a{color:var(--accent)}
+</style>
+</head>
+<body>
+<header>
+  <h1>Tmax-15k PPO 训练流程 <span class="tag">Qwen3.5-35B-A3B (MoE) · slime-terminal-RL · Harbor/Terminus2</span></h1>
+  <div class="sub">Megatron(训练) ⟷ SGLang(推理) ⟷ Ray · 点击任意模块查看职责、数据流与算法公式 · 悬停连线看传输内容</div>
+  <div class="controls" style="margin-top:14px">
+    <button class="btn" id="animBtn" onclick="toggleAnim()">▶ 播放数据流动画</button>
+    <button class="btn" onclick="setStep(0)">复位</button>
+    <span style="align-self:center;color:var(--dim);font-size:12px">当前 run: TP2×PP8×CP1×EP2→DP1 (16 GPU actor) + 40 GPU rollout(5×TP8) · batch 256 · 冷启动 critic · KL/entropy off</span>
+  </div>
+  <div class="legend">
+    <span><i class="dot" style="background:var(--rollout)"></i>Rollout (SGLang)</span>
+    <span><i class="dot" style="background:var(--buffer)"></i>Data Buffer</span>
+    <span><i class="dot" style="background:var(--critic)"></i>Critic (value)</span>
+    <span><i class="dot" style="background:var(--actor)"></i>Actor (policy)</span>
+    <span><i class="dot" style="background:var(--sync)"></i>Weight Sync</span>
+  </div>
+</header>
+
+<div class="wrap">
+  <div class="canvas" id="canvas">
+    <div class="loopbar">🔁 <b>异步主循环</b> (train_async.py)：<code>gen(rollout_id+1)</code> 在训练 <code>rollout_id</code> 之前发起 → SGLang 采样与 Megatron 训练<b>并行重叠</b>。num_rollout=100，每步同步权重。</div>
+
+    <!-- ROLLOUT -->
+    <div class="stage">
+      <div class="node" data-k="rollout" style="--c:var(--rollout)">
+        <div class="nh">① Rollout 采样 <span class="badge">SGLang · 40 GPU</span></div>
+        <div class="nd">从 tmax-15k 池取 260 个 task（oversample），每个 = 1 Daytona sandbox + 1 Terminus2 agent 串行多轮 loop；收前 256 个完成的（skim），丢慢尾。</div>
+        <div class="gpu">5 × TP8 引擎 · trajectory_retokenized → Sample(tokens, loss_mask, reward, rollout_log_probs, group_id)</div>
+      </div>
+    </div>
+    <div class="arrow"><div class="line"></div><div class="pkt"></div><div class="lbl">trajectories + reward + rollout_log_probs</div></div>
+
+    <!-- BUFFER -->
+    <div class="stage">
+      <div class="node" data-k="buffer" style="--c:var(--buffer)">
+        <div class="nh">② Data Buffer <span class="badge">Ray object</span></div>
+        <div class="nd">RolloutDataSource 汇聚 Sample，做 skim-oversample、token-cap postprocess（>64k 截断）、group_mask_sums 预计算，供训练侧按 group 读取。</div>
+        <div class="gpu">rollout_batch_size=256 · over_sampling=260 · n_samples_per_prompt=1</div>
+      </div>
+    </div>
+    <div class="arrow"><div class="line"></div><div class="pkt"></div><div class="lbl">rollout_data (batch)</div></div>
+
+    <!-- CRITIC -->
+    <div class="stage">
+      <div class="node" data-k="critic" style="--c:var(--critic)">
+        <div class="nh">③ Critic 训练 <span class="badge">Megatron · 16 GPU</span></div>
+        <div class="nd">冷启动 value head（重初始化）。前向算 value → GAE 得 advantage/return → 反向最小化 value 的 clipped MSE。产出 values 供 actor。</div>
+        <div class="gpu">critic_lr = 1.5e-5 (30×) · value_clip=0.2 · 与 actor 复用同一 placement group</div>
+      </div>
+    </div>
+    <div class="critic-only">⏳ <b>num_critic_only_steps=2</b>：rollout_id 0、1 <b>只训 critic</b>（actor 不更新），让 value 预热到正确尺度，避免乱 value 毁 actor。step≥2 起 actor 才加入。</div>
+    <div class="arrow"><div class="line"></div><div class="pkt"></div><div class="lbl">values (external_data) · advantages</div></div>
+
+    <!-- ACTOR -->
+    <div class="stage">
+      <div class="node" data-k="actor" style="--c:var(--actor)">
+        <div class="nh">④ Actor 训练 <span class="badge">Megatron · 16 GPU · step≥2</span></div>
+        <div class="nd">重算 log_probs → PPO ratio·advantage 的 clipped 目标 → 反向。KL off、entropy off。可选记录 train/inference 失配指标（tis / tis_abs）。</div>
+        <div class="gpu">actor_lr = 1e-6 (2×) · eps_clip=0.2 · grad_clip=1.0 · loss = pg_loss</div>
+      </div>
+    </div>
+    <div class="arrow"><div class="line"></div><div class="pkt"></div><div class="lbl">updated actor weights (NCCL)</div></div>
+
+    <!-- SYNC -->
+    <div class="stage">
+      <div class="node" data-k="sync" style="--c:var(--sync)">
+        <div class="nh">⑤ Weight Sync <span class="badge">每步</span></div>
+        <div class="nd">actor 新权重经 NCCL 组推给 5 个 SGLang 引擎（PP8 → 多次分段 Update weights），保证下一轮 rollout 用最新策略（近 on-policy）。</div>
+        <div class="gpu">update_weights_interval=1 → 回到 ①</div>
+      </div>
+    </div>
+    <div class="arrow" style="height:26px"><div class="line" style="background:var(--sync)"></div><div class="lbl" style="border-color:var(--sync);color:var(--sync)">↺ 回到 ① Rollout（下一 rollout_id）</div></div>
+
+    <div class="loopbar" style="border-color:var(--buffer);color:var(--buffer);background:rgba(210,153,34,.06)">📊 <b>周期动作</b>：每 <code>save_interval=5</code> 存 checkpoint；每 <code>eval_interval=10</code> 跑 Terminal-Bench 2.0 全 89 题 × n=3 eval（temp 1.0 / top-p 0.95 / top-k 20），headline = <code>harbor/eval_resolved_rate_full</code> (avg@3)。</div>
+  </div>
+
+  <!-- SIDE PANEL -->
+  <div class="side" id="side">
+    <div class="hint" id="hint">👈 点击左侧任意模块<br>查看它的职责、数据流与<b>算法公式</b><br><br>或点上方 <b>▶ 播放数据流动画</b> 看数据在模块间流动</div>
+    <div id="detail" style="display:none"></div>
+  </div>
+</div>
+
+<div class="foot">
+  数据/公式对应 slime v0.3.0 harbor 变体：<code>train_async.py</code> 主循环 · <code>slime_plugins/harbor/rollout.py</code> · <code>slime/backends/megatron_utils/loss.py</code>（policy_loss/value_loss）· <code>slime/utils/ppo_utils.py</code>（GAE / compute_policy_loss）。当前 run：Qwen3.5-35B-A3B，冷启动 critic，KL/entropy off，gamma=λ=1（蒙特卡洛回报）。
+</div>
+
+<script>
+const DATA = {
+  rollout: {
+    title:"① Rollout 采样", color:"var(--rollout)", stag:"SGLang · 40 GPU",
+    role:"用当前策略在 Daytona 沙箱里跑 Terminus2 终端 agent，产出带奖励的轨迹。这是 RL 的“环境交互”阶段。",
+    blocks:[
+      {h:"运行机制", html:`<p>256 个 task 各自一个 <b>沙箱 + agent 进程</b>，agent loop <b>严格串行</b>：读终端 → 生成一条命令 → 执行 → 再读 …… 直到 solved / <code>max_turns=60</code> / timeout。</p><p>一次只发一条 generate，故引擎侧并发 decode batch ≈ 少量。MoE 在小 batch 下吞吐不占优（这是 35B-A3B rollout 慢的根因）。</p>`},
+      {h:"每 token 采样概率（推理侧记录）", eq:`$$\\pi_{\\theta_{\\text{old}}}(a_t\\mid s_t)=\\mathrm{softmax}(z_t/T)_{a_t},\\quad \\texttt{rollout\\_log\\_probs}_t=\\log\\pi_{\\theta_{\\text{old}}}(a_t\\mid s_t)$$`, note:"采样温度 T=1.0（eval），训练 rollout 用配置温度。这份 logprob 会存进 Sample，供后续 TIS / 失配诊断。"},
+      {h:"奖励", eq:`$$r=\\text{CTRF 终端验证器打分}\\in[0,1]$$`, note:"稀疏奖励：只在轨迹末尾给分（任务是否解决），中间 turn 的 token reward=0。"},
+      {h:"关键配置", kv:["harbor_sample_mode = <b>trajectory_retokenized</b>","rollout_batch_size = <b>256</b> · oversample = <b>260</b>","n_samples_per_prompt = <b>1</b> (训练) / <b>3</b> (eval, avg@3)","context 64k · max_turns 60"]}
+    ]
+  },
+  buffer: {
+    title:"② Data Buffer", color:"var(--buffer)", stag:"Ray object",
+    role:"训练与推理之间的共享数据桥。把 Sample 组织成训练 batch，并预计算 group 级归一化量。",
+    blocks:[
+      {h:"职责", html:`<p>skim-oversample：投 260 组、收前 256 组完成的。token-cap postprocess：训练样本 >64k 硬截断。按 <code>group_id</code> 聚合同一轨迹的 chunk。</p>`},
+      {h:"group 归一化分母（loss reducer 用）", eq:`$$\\texttt{group\\_mask\\_sums}[g]=\\sum_{i\\in g}\\sum_t \\text{loss\\_mask}_{i,t}$$`, note:"同一 rollout 组内所有样本的有效 token 总数，作为 per-rollout-mean loss 的分母，保证一组只计一次。"},
+      {h:"关键字段", kv:["Sample: tokens, loss_mask, reward","rollout_log_probs, group_id","advantages / returns / values (训练侧回填)"]}
+    ]
+  },
+  critic: {
+    title:"③ Critic 训练 (value)", color:"var(--critic)", stag:"Megatron · 16 GPU",
+    role:"学习状态价值 V(s)，为 actor 提供 advantage 基线。本 run 冷启动（value head 随机重初始化）。",
+    blocks:[
+      {h:"GAE 优势与回报（γ=λ=1 → 蒙特卡洛）", eq:`$$\\hat A_t=\\sum_{l\\ge0}(\\gamma\\lambda)^l\\,\\delta_{t+l},\\quad \\delta_t=r_t+\\gamma V(s_{t+1})-V(s_t)$$ $$\\gamma=\\lambda=1\\;\\Rightarrow\\; \\hat A_t=\\underbrace{\\textstyle\\sum_{l\\ge t} r_l}_{R_t=\\text{return}_t}-V(s_t)$$`, note:"稀疏奖励 + γ=1：每个 response token 的 return ≈ 末尾那个奖励；advantage = return − value。"},
+      {h:"Value 损失（PPO clipped MSE）", eq:`$$L^{V}=\\tfrac12\\,\\mathbb{E}\\Big[\\max\\big((V_\\phi-R)^2,\\;(\\text{clip}(V_\\phi,V_{\\text{old}}\\pm\\epsilon_v)-R)^2\\big)\\Big]$$`, note:"value_clip ε_v=0.2。冷启动前几步 value_loss 大、grad_norm 大属正常暖机。"},
+      {h:"冷启动 & 预热", html:`<p>value head 形状 <code>[hidden→1]</code> 与 SFT 的 LM head 不匹配 → 自动 <b>重初始化</b>（N(0,0.02)）。<code>num_critic_only_steps=2</code> 先单独训 critic 两步再让 actor 加入。</p>`},
+      {h:"关键配置", kv:["critic_lr = 1.5e-5 (<b>30×</b>)","value_clip = 0.2","advantage_estimator = ppo","与 actor 共享 placement group（不额外占卡）"]}
+    ]
+  },
+  actor: {
+    title:"④ Actor 训练 (policy)", color:"var(--actor)", stag:"Megatron · 16 GPU",
+    role:"用 advantage 更新策略 π_θ。PPO 的 clipped surrogate，KL/entropy 均关闭，靠 ratio clip 约束更新幅度。",
+    blocks:[
+      {h:"重要性比率", eq:`$$\\rho_t(\\theta)=\\frac{\\pi_\\theta(a_t\\mid s_t)}{\\pi_{\\theta_{\\text{old}}}(a_t\\mid s_t)}=\\exp\\big(\\log\\pi_\\theta-\\log\\pi_{\\theta_{\\text{old}}}\\big)=\\exp(-\\texttt{ppo\\_kl})$$`, note:"第一个 actor step（keep_old_actor）old≈current → ρ≈1、ppo_kl≈0。"},
+      {h:"PPO Clipped 目标（最小化 pg_loss）", eq:`$$L^{\\text{PG}}=-\\,\\mathbb{E}\\Big[\\min\\big(\\rho_t\\hat A_t,\\;\\text{clip}(\\rho_t,1-\\epsilon,1+\\epsilon)\\,\\hat A_t\\big)\\Big]$$`, note:"eps_clip ε=0.2。本 run entropy_coef=0、use_kl_loss=0 → 总 loss = pg_loss。"},
+      {h:"总损失", eq:`$$L=L^{\\text{PG}}-\\underbrace{c_e\\,\\mathbb{E}[\\mathcal H(\\pi_\\theta)]}_{c_e=0}+\\underbrace{c_{kl}\\,\\mathrm{KL}(\\pi_\\theta\\Vert\\pi_{\\text{ref}})}_{c_{kl}=0}=L^{\\text{PG}}$$`, note:"grad_clip=1.0 保护参数更新幅度。"},
+      {h:"train/inference 失配诊断（可选，不进 loss）", eq:`$$\\text{tis}_t=\\exp(\\log\\pi^{\\text{train}}_t-\\log\\pi^{\\text{rollout}}_t),\\quad \\text{tis\\_abs}_t=|\\text{tis}_t-1|$$`, note:"get_mismatch_metrics=1 + record_only TIS：只记录引擎间 logprob 失配（≈0.02），不做 IS 截断、不改 pg_loss。"},
+      {h:"关键配置", kv:["actor_lr = 1e-6 (<b>2×</b>) · eps_clip = 0.2","use_kl_loss=0 · entropy_coef=0 · use_rollout_logprobs=0","keep_old_actor=1 · micro_batch_size=1","仅 rollout_id ≥ num_critic_only_steps(2) 才训"]}
+    ]
+  },
+  sync: {
+    title:"⑤ Weight Sync", color:"var(--sync)", stag:"每步",
+    role:"把更新后的 actor 权重推回 SGLang 推理引擎，闭合 on-policy 循环。",
+    blocks:[
+      {h:"机制", html:`<p>actor 更新完 → 建 NCCL 通信组 → 权重推给 5 个 SGLang 引擎。PP8 下按 pipeline stage 分多次 <code>Update weights</code> 传输。</p><p><code>update_weights_interval=1</code>：每步都同步，保证下一轮 rollout 用最新策略 → 近 on-policy，old_actor 与 current 一致。</p>`},
+      {h:"闭环", eq:`$$\\theta_{\\text{rollout}}\\leftarrow\\theta_{\\text{actor}}\\quad\\Rightarrow\\quad \\pi_{\\theta_{\\text{old}}}^{(k+1)}=\\pi_{\\theta}^{(k)}$$`, note:"同步后回到 ① Rollout，进入下一个 rollout_id。"}
+    ]
+  }
+};
+
+const side=document.getElementById("side"), hint=document.getElementById("hint"), detail=document.getElementById("detail");
+let cur=null;
+function render(k){
+  const d=DATA[k]; if(!d) return;
+  document.querySelectorAll(".node").forEach(n=>n.classList.toggle("active",n.dataset.k===k));
+  hint.style.display="none"; detail.style.display="block";
+  let h=`<h2><span class="stag" style="background:${d.color}">${d.stag}</span> ${d.title}</h2><div class="role">${d.role}</div>`;
+  d.blocks.forEach(b=>{
+    h+=`<div class="box"><h3>${b.h}</h3>`;
+    if(b.html) h+=b.html;
+    if(b.eq) h+=`<div class="eq">${b.eq}</div>`;
+    if(b.note) h+=`<p style="color:var(--dim);font-size:12px">${b.note}</p>`;
+    if(b.kv) h+=b.kv.map(x=>`<div class="kv">▸ ${x}</div>`).join("");
+    h+=`</div>`;
+  });
+  detail.innerHTML=h;
+  if(window.MathJax&&MathJax.typesetPromise) MathJax.typesetPromise([detail]);
+  cur=k;
+}
+document.querySelectorAll(".node").forEach(n=>n.addEventListener("click",()=>render(n.dataset.k)));
+
+let anim=false;
+function toggleAnim(){ anim=!anim; document.body.classList.toggle("run",anim);
+  document.getElementById("animBtn").classList.toggle("on",anim);
+  document.getElementById("animBtn").textContent=anim?"⏸ 暂停数据流动画":"▶ 播放数据流动画";
+}
+function setStep(){ /* reset */ document.querySelectorAll(".node").forEach(n=>n.classList.remove("active"));
+  detail.style.display="none"; hint.style.display="block"; cur=null; }
+</script>
+</body>
+</html>

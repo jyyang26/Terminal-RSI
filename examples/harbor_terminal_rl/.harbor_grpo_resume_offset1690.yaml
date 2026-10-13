@@ -1,0 +1,215 @@
+# strategy-15k config -- Qwen3.5-122B-A10B PPO on 176 GPU (22 nodes x 8 H20),
+# STANDARD (skim-oversample) rollout, DAYTONA backend, hybrid GDN CP=4, batch 512,
+# 84k context on BOTH sides, CTRF DENSE (partial/process) reward, WARM critic.
+#
+# Used by run_tmax15k_122b_a10b_scalable_ppo_criticlr30x_strongest_partial_reward.sh
+# with TOPOLOGY=176cp4 (128 train + 48 infer).
+#
+# ====================================================================================
+# FORKED FROM harbor_synth_all_rts_122b_a10b_daytona_ppo_cp2_bs256_partial_reward.yaml
+# ====================================================================================
+# Deltas (everything else byte-identical):
+#   1. harbor_tasks_dir  -> strategy_deepseek_repaired_v4_final_15k/materialized_top15k/tasks
+#   2. trials_dir        -> strategy15k_... (fresh; see TRIAL DIR ISOLATION below)
+#   3. agent max_context_tokens          128000 -> 86016   (was ABOVE the server wall!)
+#   4. proactive_summarization_threshold  20000 -> 65536   (the 64k/20k split)
+#   5. concurrency 280 -> 560, trials_per_node 35 -> 94    (bs512 on 6 rollout nodes)
+#
+# ====================================================================================
+# CONTEXT: 84k on BOTH sides, with a 64k rollout/train budget + 20k compaction buffer
+# ====================================================================================
+# The wrapper sets every wall to 86016 (84k): SEQ_LENGTH, HARBOR_MAX_TRAIN_TOTAL_TOKENS,
+# ROLLOUT_MAX_CONTEXT_LEN, SGLANG_CONTEXT_LENGTH, SGLANG_MAX_PREFILL_TOKENS. This yaml
+# supplies the matching AGENT-side numbers:
+#
+#   max_context_tokens: 86016                 hard ceiling the agent believes in.
+#                                             Previously 128000 -- i.e. the agent thought
+#                                             it had 128k while SGLang only served 84k, so
+#                                             long trajectories were silently truncated.
+#   proactive_summarization_threshold: 65536  the agent compacts (summarises) once its
+#                                             context reaches 64k. That 64k is the part
+#                                             that gets rolled out AND trained on; the
+#                                             remaining 86016-65536 = 20480 tokens are
+#                                             headroom for the compaction pass itself to
+#                                             run without crossing the 84k wall.
+#
+# CP=4 is what makes an 84k TRAINING wall fit: the binding term is the fp32 logits on the
+# last pipeline stage (vocab 248320), local T = 86016/CP. CP2 -> 29.8 GB -> peak 89.5 GB
+# (too tight); CP4 -> 14.9 GB -> peak 64.4 GB (+31 GB headroom).
+#
+# ====================================================================================
+# DATA: 15000 DeepSeek-audited tasks, SHUFFLED
+# ====================================================================================
+# materialized_top15k/tasks holds 15000 REAL task dirs (not symlinks). Selected from the
+# R1-R15 pool by DeepSeek-V4-Pro semantic auditing: a weighted quality score over 8
+# dimensions (instruction clarity / self-containment / instruction-verifier alignment /
+# verifier fairness+coverage / solution correctness+reasonableness / task value), with
+# hard_reject for hidden requirements, test leakage, solution shortcuts, or verifiers too
+# weak to validate the central goal. See the pool's own README.md.
+#
+# >>CTRF PRESENT (this is what makes the dense reward non-trivial): tests/test.sh runs
+#     uvx -w pytest-json-ctrf pytest --ctrf /logs/verifier/ctrf.json /tests/test_state.py
+#   so passed/total per test is written where partial_reward._load_progress_score reads it.
+#   The launcher re-verifies this on 20 sampled tasks and refuses to start if <10 have it.
+#
+# >>SHUFFLE is REQUIRED: the pool is materialised in QUALITY RANK order
+#   (quality15k_v4_00001 = best), so sorted(glob) would sweep best-to-worst monotonically
+#   and every 512-batch would be drawn from one narrow quality band. rollout_shuffle
+#   reorders the whole pool per epoch (data_source.py::_ensure_epoch).
+#
+# SCHEDULE: 3 epochs over 15000 @ bs512 = ceil(15000/512)=30 steps/epoch x 3 = 90 steps.
+#
+# ====================================================================================
+# REWARD / CRITIC / TRIAL DIR
+# ====================================================================================
+# Reward: slime_plugins.harbor.partial_reward.test_count_progress_rewards
+#   shaped = passed_tests / HARBOR_TESTCOUNT_SCALE (=20), the ABSOLUTE passed-test count.
+#   Under advantage_estimator=ppo, _should_normalize() is False, so raw shaped rewards
+#   flow straight into critic + GAE with no group normalization. Values CAN exceed 1.0
+#   for tasks with >20 tests (measured up to 2.75); PPO absorbs the scale.
+#
+# Critic: WARM-loaded from the tmax15k 88cp4-84k run's iter_0000069 value head via a
+#   load-root symlink pair (<load> / <load>_critic) -- see the wrapper. Weights-only, so
+#   the source run's 69-step LR schedule cannot clash with this run's. Hence
+#   NUM_CRITIC_ONLY_STEPS=2 (re-calibration only) rather than 5 (cold start).
+#
+# TRIAL DIR ISOLATION: trial dirs are an OUTPUT (training writes verifier/ctrf.json and
+#   the reward reads it back) -- nothing needs pre-populating. But _trial_name()
+#   (harbor/rollout.py) is "slime-r{rollout}-g{group}-s{rank}-i{index}" with NO run tag,
+#   so pointing trials_dir at a previous run would collide name-for-name and a new trial
+#   that fails to emit its own ctrf would silently be scored on ANOTHER model's leftover
+#   ctrf.json. The wrapper rewrites this line to a ${RUN_TAG}-scoped path at launch.
+
+rollout_shuffle: true) -- REQUIRED for this pool
+# ====================================================================================
+# The pool is assembled in shard/synthesis order, so sorted(glob) would sweep it
+# monotonically and each 256-task batch would be drawn from one narrow slice of the
+# synthesis rounds. Shuffle reorders the whole pool with a seed+epoch permutation
+# (slime/rollout/data_source.py::_ensure_epoch), so every batch mixes difficulties.
+#
+# ====================================================================================
+# TRIAL DIR ISOLATION -- why this MUST be a fresh directory
+# ====================================================================================
+# Trial dirs are an OUTPUT of training, not an input: each rollout writes
+#   <trials_dir>/slime-r{rollout}-g{group}-s{rank}-i{index}/verifier/ctrf.json
+# and partial_reward reads that same path back. Nothing needs to be pre-populated.
+#
+# BUT the name is fully deterministic (slime_plugins/harbor/rollout.py::_trial_name) --
+# it contains NO run tag and NO timestamp. If trials_dir pointed at the previous 27B
+# run's directory, this run's slime-r0-g0-s0-i0 would collide with the 27B one. In that
+# old dir only 47/400 sampled trials have a ctrf.json (353 verifier dirs are empty), so
+# whenever a new trial fails to emit its own ctrf (verifier timeout / agent failure --
+# common), _load_progress_score would silently read the 27B MODEL's leftover ctrf and
+# score THIS run against another model's results. No error, no warning.
+# => always a fresh, run-scoped directory. The launcher refuses known-stale paths.
+# The old 27B dir is still useful, but ONLY as a read-only regression fixture.
+
+rollout_shuffle: true
+
+# Training pool: the unpacked Recursive-Task-Synthesis corpus (37484 task.toml dirs) on
+# the shared fs (all nodes read it directly; no node-local /tmp staging).
+harbor_tasks_dir: /path/to/workspace/slime-terminal-RL_data/strategy_deepseek_repaired_v4_final_15k/materialized_top15k/tasks
+harbor_tasks_glob: "*/task.toml"
+
+# Held-out EVAL pool: the 89 Terminal-Bench 2 tasks (gy4 share, all nodes see it).
+# Unchanged from the parent yaml -- these DO emit ctrf.json (verified in past eval runs).
+harbor_eval_tasks_dir: /path/to/workspace/terminal-bench-2
+harbor_eval_tasks_glob: "*/task.toml"
+
+harbor_trial_defaults:
+  # FRESH, run-scoped. Never reuse the 27B synth_all_38k_ppo_dense_shuffle_* dirs.
+  trials_dir: /path/to/workspace/slime_harbor_trials/strategy15k_122b_a10b_ppo_partial_reward
+  timeout_multiplier: 1.0
+  agent:
+    import_path: slime_plugins.harbor.agent:SlimeTerminus2
+    model_name: slime-policy
+    override_timeout_sec: 3600
+    kwargs:
+      parser_name: json
+      max_turns: 60
+      collect_rollout_details: true
+      enable_summarize: true
+      proactive_summarization_threshold: 65536
+      trajectory_config:
+        raw_content: true
+        linear_history: true
+      record_terminal_session: false
+      llm_backend: slime_sglang
+      llm_kwargs:
+        apply_chat_template_kwargs:
+          enable_thinking: false
+        max_context_tokens: 86016
+  verifier:
+    override_timeout_sec: 900
+  environment:
+    type: daytona
+    delete: true
+    override_storage_mb: 10240
+    kwargs:
+      connection_pool_maxsize: 128
+      auto_stop_interval_mins: 90
+      auto_delete_interval_mins: 10
+
+harbor_sample_mode: trajectory_retokenized
+harbor_group_unit: trajectory
+harbor_reward_key: reward
+
+# GRPO n=8: one GROUP is one task rolled out 8 times, i.e. 8 sandboxes. The advantage of
+# each trajectory is its reward minus the MEAN REWARD OF ITS GROUP, so a group that is
+# accepted with fewer than its full 8 members has a baseline computed from a truncated
+# sample -- and a group truncated to a single member has baseline == reward == advantage 0.
+#
+# That is exactly what happened on the first GRPO attempt with the PPO yaml: it inherited
+# harbor_partial_group_min_units: 1, harbor produced num_groups=64 / num_samples=64 (one
+# trajectory per group instead of 8), and every step logged
+#   rollout/advantages 0.0, train/pg_loss 0.0, train/grad_norm 0.0
+# -- the actor ran the full forward/backward and learned nothing.
+#
+# 0 = "no partial acceptance": a group counts only when all 8 trajectories are in.
+harbor_partial_group_min_units: 0
+harbor_partial_group_min_trajectories: 0
+
+# CONCURRENCY IS CAPPED BY THE DAYTONA ORG QUOTA, NOT BY THIS CLUSTER.
+# The account's ceiling is a TOTAL MEMORY budget ("Maximum allowed: 3000GiB"), so what
+# matters is how many sandboxes are alive at once. The PPO run sustained 560 and never hit
+# the limit; a first GRPO attempt at 640 did, and every over-limit trial died with
+# "Failed to create sandbox: Total memory limit exceeded" -- which under n=8 is much worse
+# than losing one sample, because ONE dead trial invalidates its whole 8-member group.
+# That is why 91 groups in a row were dropped at 0/8..5/8 and the rollout never filled.
+#
+# 64 groups x 8 = 512 concurrent sandboxes, comfortably inside the proven 560.
+harbor_num_concurrent_trials: 512
+# ★ Must be ~= the number of groups actually needed (64), NOT a large fan-out number.
+# Capacity is finite: spreading it over 80 groups leaves every group with fewer than 8
+# live trials, so groups keep timing out partially filled and get dropped. Matching the
+# in-flight group count to the target lets each group get its full 8 slots and COMPLETE.
+harbor_fully_async_max_concurrent_groups: 64
+
+# Daytona per-org create limit 600/min (=10/s); pace to 6/s (matches source).
+harbor_create_rate_per_sec: 6.0
+harbor_create_rate_burst: 6.0
+
+harbor_trial_node_spread: true
+harbor_trials_per_node: 70
+harbor_trial_worker_num_cpus: 0.05
+harbor_trial_worker_startup_timeout_sec: 120
+harbor_trial_worker_healthcheck_timeout_sec: 30
+harbor_kill_unhealthy_trial_workers: false
+harbor_fallback_to_inprocess_trials: false
+harbor_trial_remote_timeout_sec: 5400
+
+harbor_eval_total_timeout_sec: 10800
+rollout_cleanup_function_path: slime_plugins.harbor.fully_async_rollout.cleanup_rollout
+harbor_fully_async_shutdown_drain_timeout_sec: 30
+harbor_fully_async_shutdown_join_timeout_sec: 45
+
+harbor_fail_on_conversion_error: true
+harbor_fail_on_trial_error: false
+# Under GRPO an incomplete group is not "slightly worse data", it is a ZERO-GRADIENT
+# sample. Refuse to hand a short group to the trainer; retry the task instead.
+harbor_require_full_rollout_groups: true
+harbor_rollout_group_attempt_multiplier: 12
+harbor_retry_missing_samples: 0
+
+# Skip every task already consumed by previous runs (see .max_consumed_task.py).
+harbor_tasks_offset: 1690

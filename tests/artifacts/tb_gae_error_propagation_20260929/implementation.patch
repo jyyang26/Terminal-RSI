@@ -1,0 +1,341 @@
+--- a/slime_plugins/harbor/rollout.py
++++ b/slime_plugins/harbor/rollout.py
+@@ -293,6 +293,10 @@
+             discarded_failed_count += group_stats["failed"]
+             discarded_missing_count += group_stats["missing"]
+         except Exception:
++            if getattr(args, "enable_tb_gae", False) is True:
++                # A completed excess group can carry the same unsupported-tail
++                # error as an accepted group. Do not hide it after filling the batch.
++                raise
+             logger.warning("Discarding completed over-sampled Harbor group task with error.", exc_info=True)
+ 
+     try:
+@@ -365,7 +369,16 @@
+                 if started_at is not None:
+                     cancelled_tail_ages.append(now - started_at)
+                 task.cancel()
+-            await asyncio.gather(*pending_group_tasks, return_exceptions=True)
++            tail_results = await asyncio.gather(*pending_group_tasks, return_exceptions=True)
++            if getattr(args, "enable_tb_gae", False) is True:
++                from sys import exc_info
++
++                # Preserve the primary exception while cleaning up. On normal
++                # completion, do not discard an error that raced with cancellation.
++                if exc_info()[0] is None:
++                    for result in tail_results:
++                        if isinstance(result, Exception):
++                            raise result
+ 
+     if not output_groups:
+         raise RuntimeError("Harbor rollout produced no trainable slime samples.")
+@@ -816,6 +829,10 @@
+                 try:
+                     samples = task.result()
+                 except Exception as exc:
++                    if getattr(args, "enable_tb_gae", False) is True:
++                        # Protocol/unsupported-tail failures must abort the rollout,
++                        # even when production trial-error tolerance is enabled.
++                        raise
+                     if getattr(args, "enable_score_centering", False):
+                         # A missing/malformed head must not silently turn into dropped training data.
+                         raise
+@@ -832,6 +849,8 @@
+                     stats["trajectories"] += 1
+                     continue
+ 
++                if getattr(args, "enable_tb_gae", False) is True:
++                    raise ValueError("TB-GAE trial produced no samples; refusing silent drop or backfill")
+                 stats["missing"] += 1
+                 if attempt < retry_missing_samples:
+                     submit_sample_task(sample_rank, base_sample, attempt + 1)
+@@ -855,13 +874,25 @@
+                 )
+                 for task in running_tasks:
+                     task.cancel()
+-                await asyncio.gather(*running_tasks, return_exceptions=True)
++                tail_results = await asyncio.gather(*running_tasks, return_exceptions=True)
++                if getattr(args, "enable_tb_gae", False) is True:
++                    for result in tail_results:
++                        if isinstance(result, Exception):
++                            raise result
+                 running_tasks.clear()
+     finally:
+         if running_tasks:
+             for task in running_tasks:
+                 task.cancel()
+-            await asyncio.gather(*running_tasks, return_exceptions=True)
++            tail_results = await asyncio.gather(*running_tasks, return_exceptions=True)
++            if getattr(args, "enable_tb_gae", False) is True:
++                from sys import exc_info
++
++                primary = exc_info()[1]
++                if primary is None or isinstance(primary, asyncio.CancelledError):
++                    for result in tail_results:
++                        if isinstance(result, Exception):
++                            raise result
+ 
+     return output_group, stats
+ 
+@@ -1302,6 +1333,8 @@
+             **sc_conversion_kwargs,
+         )
+     except RolloutConversionError:
++        if getattr(args, "enable_tb_gae", False) is True and not _is_eval_args(args):
++            raise
+         if getattr(args, "harbor_fail_on_conversion_error", True):
+             raise
+         logger.exception("Failed to convert Harbor trial result to slime samples.")
+--- /dev/null
++++ b/tests/test_tb_gae_error_propagation.py
+@@ -0,0 +1,250 @@
++"""TB training failures must not become a survivor-only rollout batch."""
++
++import ast
++import asyncio
++import hashlib
++import json
++from pathlib import Path
++from types import SimpleNamespace
++
++import pytest
++import yaml
++
++from slime.utils.types import Sample
++from slime_plugins.harbor import rollout
++from slime_plugins.harbor.atif_adapter import RolloutConversionError
++
++from test_tb_gae_termination_smoke import convert, execute, make_agent
++
++NUM_GPUS = 0
++pytestmark = pytest.mark.unit
++ROOT = Path(__file__).resolve().parents[1]
++
++
++def args_for(enabled):
++    config = yaml.safe_load(
++        (
++            ROOT / "examples/harbor_terminal_rl/harbor_mixed3000_128gpu_27b_dense_daytona_ppo_cp4_256k_fresh_base.yaml"
++        ).read_text()
++    )
++    args = SimpleNamespace(
++        enable_tb_gae=enabled,
++        enable_score_centering=False,
++        harbor_fail_on_trial_error=config["harbor_fail_on_trial_error"],
++        harbor_fail_on_conversion_error=False,
++        harbor_retry_missing_samples=config["harbor_retry_missing_samples"],
++        rollout_batch_size=1,
++        over_sampling_batch_size=2,
++        n_samples_per_prompt=1,
++        harbor_num_concurrent_trials=2,
++        harbor_sample_mode="trajectory_retokenized",
++        harbor_require_full_rollout_groups=True,
++        rollout_sample_filter_path=None,
++        rollout_all_samples_process_path=None,
++    )
++    assert args.harbor_fail_on_trial_error is False and args.harbor_retry_missing_samples == 0
++    return args
++
++
++def old_group_function():
++    root = ROOT / "tests/fixtures/tb_gae_error_propagation_pre_patch"
++    entry = json.loads((root / "manifest.json").read_text())["slime_plugins/harbor/rollout.py"]
++    source = (root / entry["snapshot"]).read_bytes()
++    assert hashlib.sha256(source).hexdigest() == entry["sha256"]
++    node = next(
++        n for n in ast.parse(source).body if isinstance(n, ast.AsyncFunctionDef) and n.name == "_run_one_group"
++    )
++    ns = dict(vars(rollout))
++    exec(compile(ast.Module(body=[node], type_ignores=[]), "pre-error-propagation", "exec"), ns)
++    return ns[node.name]
++
++
++def run_group(args, function=None, count=1):
++    return asyncio.run(
++        (function or rollout._run_one_group)(
++            args,
++            0,
++            0,
++            [Sample(index=i) for i in range(count)],
++            asyncio.Semaphore(count),
++            retry_missing_samples=args.harbor_retry_missing_samples,
++        )
++    )
++
++
++@pytest.mark.parametrize("replies", [[False, False], [False, True]])
++def test_real_truncated_agent_old_code_drops_new_code_aborts(monkeypatch, tmp_path, replies):
++    agent, _ = make_agent(monkeypatch, tmp_path, replies, max_turns=2)
++    context = execute(agent)
++    assert context.metadata["termination_reason"] == "max_turns"
++    calls = []
++
++    async def trial(*unused):
++        calls.append(1)
++        return convert(context)
++
++    monkeypatch.setattr(rollout, "_run_one_with_semaphore", trial)
++    old_samples, stats = run_group(args_for(True), old_group_function())
++    assert old_samples == [] and stats["failed"] == 1 and stats["missing"] == 1
++    calls.clear()
++    with pytest.raises(ValueError, match="max_turns"):
++        run_group(args_for(True))
++    assert calls == [1]  # No retry/backfill disguised as ordinary failed trials.
++
++
++@pytest.mark.parametrize("error", [ValueError("TB-GAE split chunks"), RuntimeError("remote worker failure")])
++def test_on_errors_are_fatal_even_if_production_tolerates_trials(monkeypatch, error):
++    async def trial(*unused):
++        raise error
++
++    monkeypatch.setattr(rollout, "_run_one_with_semaphore", trial)
++    with pytest.raises(type(error), match=str(error)):
++        run_group(args_for(True))
++
++
++@pytest.mark.parametrize("enabled", [False, "absent"])
++def test_off_failure_and_empty_behavior_equal_frozen_source(monkeypatch, enabled):
++    async def trial(args, rid, gid, rank, sample, semaphore):
++        if rank == 0:
++            raise ValueError("ordinary trial failure")
++        return []
++
++    monkeypatch.setattr(rollout, "_run_one_with_semaphore", trial)
++    args = args_for(False)
++    if enabled == "absent":
++        del args.enable_tb_gae
++    assert run_group(args, count=2) == run_group(args, old_group_function(), count=2)
++
++
++def test_on_empty_samples_cannot_be_backfilled(monkeypatch):
++    calls = []
++
++    async def trial(*unused):
++        calls.append(1)
++        return []
++
++    monkeypatch.setattr(rollout, "_run_one_with_semaphore", trial)
++    args = args_for(True)
++    args.harbor_retry_missing_samples = 3
++    with pytest.raises(ValueError, match="refusing silent drop"):
++        run_group(args)
++    assert calls == [1]
++
++
++@pytest.mark.parametrize("enabled", [False, True])
++def test_conversion_tolerance_cannot_swallow_tb_failure(monkeypatch, enabled):
++    from harbor.trial.trial import Trial
++
++    async def create(*unused):
++        async def run():
++            return {}
++
++        return SimpleNamespace(run=run)
++
++    def fail(*unused, **kwargs):
++        raise RolloutConversionError("invalid response alignment")
++
++    monkeypatch.setattr(Trial, "create", create)
++    monkeypatch.setattr(rollout, "_build_trial_config", lambda *args: None)
++    monkeypatch.setattr(rollout, "ensure_daytona_api_proxy", lambda: None)
++    monkeypatch.setattr(rollout, "ensure_daytona_s3_proxy", lambda: None)
++    monkeypatch.setattr(rollout, "samples_from_trial_result", fail)
++    coro = rollout._run_one_trial(args_for(enabled), 0, 0, 0, Sample(index=0))
++    if enabled:
++        with pytest.raises(RolloutConversionError, match="alignment"):
++            asyncio.run(coro)
++    else:
++        assert asyncio.run(coro) == []
++
++
++class Source:
++    def __init__(self):
++        self.requests = []
++
++    def get_samples(self, count):
++        self.requests.append(count)
++        return [[Sample(index=i)] for i in range(count)]
++
++
++def sample(index=0):
++    return Sample(
++        index=index,
++        tokens=[10, 20],
++        response_length=1,
++        loss_mask=[1],
++        rollout_log_probs=[-0.5],
++        reward=0.7,
++        status=Sample.Status.COMPLETED,
++    )
++
++
++def test_rollout_cannot_hide_error_in_completed_excess_group(monkeypatch):
++    async def group(args, rid, gid, *unused, **kwargs):
++        if gid == 1:
++            raise ValueError("completed excess group has invalid TB tail")
++        return [sample()], {"converted": 1, "trajectories": 1, "failed": 0, "missing": 0}
++
++    real_wait = asyncio.wait
++
++    async def all_done_in_good_then_bad_order(tasks, **kwargs):
++        ordered = sorted(tasks, key=lambda task: int(task.get_name().split("-")[-1]))
++        await real_wait(ordered)
++        return ordered, set()
++
++    monkeypatch.setattr(rollout, "_run_one_group", group)
++    monkeypatch.setattr(rollout.asyncio, "wait", all_done_in_good_then_bad_order)
++    source = Source()
++    with pytest.raises(ValueError, match="completed excess"):
++        asyncio.run(rollout._generate_rollout_async(args_for(True), 0, source))
++    assert source.requests == [2]
++
++
++@pytest.mark.parametrize("primary_failure", [False, True])
++def test_pending_error_during_cancel_is_not_hidden_or_replaces_primary(monkeypatch, primary_failure):
++    async def group(args, rid, gid, *unused, **kwargs):
++        if gid == 0:
++            await asyncio.sleep(0.01)
++            if primary_failure:
++                raise ValueError("primary unsupported tail")
++            return [sample()], {"converted": 1, "trajectories": 1, "failed": 0, "missing": 0}
++        try:
++            await asyncio.Event().wait()
++        except asyncio.CancelledError:
++            raise ValueError("secondary error at cancellation") from None
++
++    monkeypatch.setattr(rollout, "_run_one_group", group)
++    expected = "primary unsupported" if primary_failure else "secondary error"
++    with pytest.raises(ValueError, match=expected):
++        asyncio.run(rollout._generate_rollout_async(args_for(True), 0, Source()))
++
++
++def test_real_group_tail_error_propagates_across_coordinator_cancellation(monkeypatch):
++    async def trial(args, rid, gid, rank, *unused):
++        if gid == 0:
++            await asyncio.sleep(0.01)
++            return [sample()]
++        try:
++            await asyncio.Event().wait()
++        except asyncio.CancelledError:
++            raise ValueError("real group cleanup tail failure") from None
++
++    monkeypatch.setattr(rollout, "_run_one_with_semaphore", trial)
++    with pytest.raises(ValueError, match="real group cleanup"):
++        asyncio.run(rollout._generate_rollout_async(args_for(True), 0, Source()))
++
++
++def test_partial_group_cannot_hide_error_during_cancellation(monkeypatch):
++    async def trial(args, rid, gid, rank, *unused):
++        if rank == 0:
++            await asyncio.sleep(0.01)
++            return [sample()]
++        try:
++            await asyncio.Event().wait()
++        except asyncio.CancelledError:
++            raise ValueError("partial group cleanup error") from None
++
++    monkeypatch.setattr(rollout, "_run_one_with_semaphore", trial)
++    args = args_for(True)
++    args.harbor_partial_group_min_units = 1
++    with pytest.raises(ValueError, match="partial group"):
++        run_group(args, count=2)

@@ -1,0 +1,130 @@
+# PPO (actor-critic + GAE) on the TerminalWorld by_length CURRICULUM, 96-GPU
+# Qwen3.5-27B fully-async. raw mode, KL OFF, no rollout-logprobs, LENGTH REWARD OFF.
+# Used by run_terminalworld_mid830_96gpu_27b_daytona_ppo_n4_nolenreward_fully_async.sh.
+#
+# WHAT THIS IS: the n=4 FORMAL PPO recipe that just trained end-to-end on the TB2-89
+# overfit run (harbor_tb2_full89_96gpu_27b_daytona_ppo_n4.yaml), repointed from the
+# 89-task overfit pool to the REAL by_length training curriculum. The algorithm,
+# concurrency, oversampling, Daytona backstops and trial timings are IDENTICAL to
+# that proven run -- the ONLY change is the training data (+ a held-out eval pool).
+# User directive: "run PPO, no length reward."
+#
+#   - PPO advantage estimator (wrapper: ADVANTAGE_ESTIMATOR=ppo, EPS_CLIP=0.2,
+#     NUM_CRITIC_ONLY_STEPS=1). The critic's per-trajectory GAE value is the
+#     baseline, so group-relative multi-sampling is redundant -> n=4 (plumbing only).
+#   - LENGTH REWARD OFF (wrapper clears CUSTOM_REWARD_POST_PROCESS_PATH) -> reward is
+#     the raw terminal binary checker (0/1). PPO handles sparse binary reward via the
+#     critic. (harbor_reward_key: reward, unchanged.)
+#   - GROUP-LEVEL oversampling ONLY: partial_group_min_units=4 (= n, NO within-group
+#     tail-cancel) + max_concurrent_groups=24 (the Daytona long-tail hedge). 24 groups
+#     x 4 trials = 96 concurrent sandboxes (far below the 320 that needs the nofile
+#     fix; well within tier4 ~960GiB << 5000GiB).
+#
+# DATA: the by_length curriculum (1530 NNNNNN_lenNNNNN_tw_XXXXXX symlinks, ordered
+# short->long by solution length). harbor_tasks_offset: 700 + harbor_tasks_limit:
+# 1000 selects the 701st..1530th = the 830 MEDIUM-HARD tasks (limit 1000 > remaining
+# 830, so it clamps to all 830). NO shuffle -> ascending-difficulty curriculum,
+# starting past the trivial tail. Rationale: the easiest ~700 tasks are solved
+# near-always by the base model (advantage -> 0 once the critic learns V~=1), so
+# they burn Daytona compute without teaching anything; starting at medium difficulty
+# focuses the budget on the learnable frontier and gives a cleaner reward signal.
+# (For PPO this is an EFFICIENCY choice, not the zero-gradient correctness fix it was
+# for the GSPO curriculum -- PPO's per-trajectory critic baseline doesn't zero out on
+# uniform-reward groups. See DIAGNOSIS_gspolen_20260616_run.md for the offset history.)
+# To train the full set instead, set harbor_tasks_offset: 0 and remove the limit.
+harbor_tasks_dir: /path/to/workspace/code/harbor-code-synthesis/TerminalWorld/unpacked/by_length
+harbor_tasks_glob: "*/task.toml"
+harbor_tasks_offset: 700
+harbor_tasks_limit: 1000
+
+# Held-out EVAL pool: Terminal-Bench 2 (89 tasks, */task.toml) -- GENUINELY held out
+# here (training is by_length, not TB2). Independent cursor; the eval rollout iterates
+# the full 89 once per pass without advancing the training curriculum cursor. This is
+# the stable cross-run progress signal (base model ~27-41%); watch its trend.
+harbor_eval_tasks_dir: /path/to/workspace/code/terminal-bench-2-main
+harbor_eval_tasks_glob: "*/task.toml"
+
+harbor_trial_defaults:
+  trials_dir: /path/to/workspace/slime_harbor_trials/terminalworld_mid830_ppo_n4_nolenreward
+  timeout_multiplier: 1.0
+  agent:
+    import_path: slime_plugins.harbor.agent:SlimeTerminus2
+    model_name: slime-policy
+    # Agent wall-clock budget 3600s (same as the proven PPO run). It's an upper
+    # bound; by_length tasks finish well under it, only the long tail uses it.
+    override_timeout_sec: 3600
+    kwargs:
+      parser_name: json
+      max_turns: 60
+      collect_rollout_details: true
+      enable_summarize: true
+      proactive_summarization_threshold: 20000
+      trajectory_config:
+        raw_content: true
+        linear_history: true
+      record_terminal_session: false
+      llm_backend: slime_sglang
+      llm_kwargs:
+        apply_chat_template_kwargs:
+          enable_thinking: false
+        max_context_tokens: 64000
+  # Verifier hard wall 900s: trial bounded at agent(<=3600) + verifier(<=900) +
+  # setup, comfortably under remote_timeout (5400s) and Daytona idle auto-delete.
+  verifier:
+    override_timeout_sec: 900
+  environment:
+    type: daytona
+    delete: true
+    override_storage_mb: 10240
+    kwargs:
+      connection_pool_maxsize: 128
+      # Leak backstop (a stop() that never ran). Daytona's auto_delete clock starts
+      # only AFTER a sandbox is STOPPED, so auto_delete alone is inert while a leaked
+      # sandbox stays `started` forever (auto_stop defaults to 0 = never). MUST set
+      # both: leaked sandbox idle -> auto_stop 90min -> auto_delete 10min later.
+      # auto_stop (90) > agent wall (3600s=60min) so a live trial is never reaped
+      # mid-run. Healthy trials are deleted immediately by stop(); these only catch leaks.
+      auto_stop_interval_mins: 90
+      auto_delete_interval_mins: 10
+
+harbor_sample_mode: trajectory_retokenized
+harbor_group_unit: trajectory
+harbor_reward_key: reward
+
+# n=4 per group, NO within-group tail-cancel (partial_group_min_units = n = 4, so a
+# group is accepted only when all 4 trajectories are in). GROUP-LEVEL oversampling:
+# 24 groups in flight (> the 64-prompt steady-state per step) lets fast groups cover
+# for slow ones -- the Daytona long-tail hedge. 24 x 4 = 96 concurrent sandboxes.
+harbor_num_concurrent_trials: 96
+harbor_fully_async_max_concurrent_groups: 24
+harbor_partial_group_min_units: 4
+
+harbor_trial_node_spread: true
+# 96 trials / 8 rollout nodes = 12 trial-worker actors/node.
+harbor_trials_per_node: 12
+harbor_trial_worker_num_cpus: 0.05
+harbor_trial_worker_startup_timeout_sec: 120
+harbor_trial_worker_healthcheck_timeout_sec: 30
+harbor_kill_unhealthy_trial_workers: false
+harbor_fallback_to_inprocess_trials: false
+# Per-trial coordinator wall 5400s (90min): above agent(3600)+verifier(900)+setup,
+# so a real slow trial isn't killed, but a lost-future stall self-heals in <=90min.
+harbor_trial_remote_timeout_sec: 5400
+
+# Total eval wall 3600s (60min): bounds the whole eval gather; at the deadline,
+# pending eval tasks are cancelled and pass-rate is scored on what finished.
+harbor_eval_total_timeout_sec: 3600
+rollout_cleanup_function_path: slime_plugins.harbor.fully_async_rollout.cleanup_rollout
+harbor_fully_async_shutdown_drain_timeout_sec: 30
+harbor_fully_async_shutdown_join_timeout_sec: 45
+
+harbor_fail_on_conversion_error: true
+harbor_fail_on_trial_error: false
+# With NO within-group tail-cancel (min_units = n = 4), a group needs all 4 units;
+# allow accepting partial groups so a single failed/leaked trial doesn't force the
+# group to be retried/dropped.
+harbor_require_full_rollout_groups: false
+# Retry headroom for group attempts so transient Daytona create failures don't
+# exhaust the budget before enough groups complete.
+harbor_rollout_group_attempt_multiplier: 12
+harbor_retry_missing_samples: 0

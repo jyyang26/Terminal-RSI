@@ -1,0 +1,46 @@
+{
+  "slime_plugins/harbor/atif_adapter.py": {
+    "snapshot": "slime_plugins__harbor__atif_adapter.py.txt",
+    "sha256": "45bf31d40bd1e9c86a19dbee280ba3f010150621a3aa2fdb3ea0aadb9a69f485"
+  },
+  "slime_plugins/harbor/llm.py": {
+    "snapshot": "slime_plugins__harbor__llm.py.txt",
+    "sha256": "a01f981229111986e70a5e789a9333911f426ff9b219e45da342e38e7e00477d"
+  },
+  "slime_plugins/harbor/tb_gae.py": {
+    "snapshot": "slime_plugins__harbor__tb_gae.py.txt",
+    "sha256": "1acaddb6eab36ffeb374b74433731d69b3eacc65b83ed604ed445c5b829c99bf"
+  },
+  "slime_plugins/harbor/tb_gae_data.py": {
+    "snapshot": "slime_plugins__harbor__tb_gae_data.py.txt",
+    "sha256": "3241e0951fd3f202a471bf5a44acac74f8b756aec4267db1ec87add8f3fe2bf6"
+  },
+  "slime_plugins/harbor/tb_gae_termination.py": {
+    "snapshot": "slime_plugins__harbor__tb_gae_termination.py.txt",
+    "sha256": "48c5986d10b709d5d8b150b6c8b45671f2d848bb3ac40fa6b27d961c30988b3e"
+  },
+  "slime_plugins/harbor/sample_postprocess.py": {
+    "snapshot": "slime_plugins__harbor__sample_postprocess.py.txt",
+    "sha256": "6f14c377ca8891523691c904942356d505c355af815f0b05a0fbfaa2fac878ff"
+  },
+  "slime_plugins/harbor/rollout.py": {
+    "snapshot": "slime_plugins__harbor__rollout.py.txt",
+    "sha256": "1ef2944edcf33f62d3798a88e5da3f2b41efba335853f953e254bfdde4ab9165"
+  },
+  "slime/ray/rollout.py": {
+    "snapshot": "slime__ray__rollout.py.txt",
+    "sha256": "1a3b039ae71d75ebcd2bfa2617f7910a2647f1964e0e584d5e552d8a75a96580"
+  },
+  "slime/backends/megatron_utils/actor.py": {
+    "snapshot": "slime__backends__megatron_utils__actor.py.txt",
+    "sha256": "3fe3a82c2980324c0ff66ae3b26de54bc3c0ed4532a580f192a4cf98a12aba5b"
+  },
+  "slime/backends/megatron_utils/data.py": {
+    "snapshot": "slime__backends__megatron_utils__data.py.txt",
+    "sha256": "4ce597a23d94d6e38ea33f8d05d534ddd6ab991c5b3f40d2b61ced6a134aac90"
+  },
+  "../harbor/src/harbor/agents/terminus_2/terminus_2.py": {
+    "snapshot": "..__harbor__src__harbor__agents__terminus_2__terminus_2.py.txt",
+    "sha256": "1b86aae64a2341d5a43455016a7a6807133f50d3279e624e15cc66166fe0774c"
+  }
+}

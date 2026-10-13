@@ -1,0 +1,69 @@
+# Qwen3.5-35B-A3B TB2 quality run: thinking mode + model-card coding sampling.
+# Prior eval configs/results remain immutable.
+harbor_tasks_dir: /path/to/workspace/terminal-bench-2-main
+harbor_tasks_glob: "*/task.toml"
+harbor_eval_tasks_dir: /path/to/workspace/terminal-bench-2-main
+harbor_eval_tasks_glob: "*/task.toml"
+harbor_trial_defaults:
+  trials_dir: /path/to/workspace/slime_harbor_trials/tb2_eval_only_qwen35_thinking_v3
+  timeout_multiplier: 1.0
+  agent:
+    import_path: slime_plugins.harbor.agent:SlimeTerminus2
+    model_name: slime-policy
+    override_timeout_sec: 5400
+    kwargs:
+      parser_name: json
+      max_turns: 120
+      collect_rollout_details: true
+      enable_summarize: true
+      proactive_summarization_threshold: 16000
+      trajectory_config:
+        raw_content: true
+        linear_history: true
+      record_terminal_session: false
+      llm_backend: slime_sglang
+      llm_kwargs:
+        apply_chat_template_kwargs:
+          enable_thinking: true
+        max_context_tokens: 131072
+        # Qwen model-card thinking / precise-coding recommendation.
+        temperature: 0.6
+        top_p: 0.95
+        top_k: 20
+        min_p: 0.0
+        presence_penalty: 0.0
+        repetition_penalty: 1.0
+  verifier:
+    override_timeout_sec: 900
+  environment:
+    type: daytona
+    delete: true
+    override_storage_mb: 10240
+    kwargs:
+      connection_pool_maxsize: 128
+      auto_stop_interval_mins: 120
+      auto_delete_interval_mins: 10
+harbor_sample_mode: trajectory_retokenized
+harbor_group_unit: trajectory
+harbor_reward_key: reward
+harbor_num_concurrent_trials: 260
+harbor_partial_group_min_units: 1
+harbor_create_rate_per_sec: 6.0
+harbor_create_rate_burst: 6.0
+harbor_trial_node_spread: true
+harbor_trials_per_node: 35
+harbor_trial_worker_num_cpus: 0.05
+harbor_trial_worker_startup_timeout_sec: 120
+harbor_trial_worker_healthcheck_timeout_sec: 30
+harbor_kill_unhealthy_trial_workers: false
+harbor_fallback_to_inprocess_trials: false
+harbor_trial_remote_timeout_sec: 7200
+harbor_eval_total_timeout_sec: 7200
+rollout_cleanup_function_path: slime_plugins.harbor.fully_async_rollout.cleanup_rollout
+harbor_fully_async_shutdown_drain_timeout_sec: 30
+harbor_fully_async_shutdown_join_timeout_sec: 45
+harbor_fail_on_conversion_error: true
+harbor_fail_on_trial_error: false
+harbor_require_full_rollout_groups: false
+harbor_rollout_group_attempt_multiplier: 12
+harbor_retry_missing_samples: 0

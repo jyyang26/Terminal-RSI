@@ -1,0 +1,101 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Reward × Validator Radar · 46 Families</title>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+<style>
+ :root{--hero:#285AC7;--navy:#0F2459;--ice:#E8F0FE;--mid:#93B5F5;--grey:#5A739C;--ink:#1e293b;--muted:#64748b;--line:#dbe3f3;--bg:#f6f8fd}
+ *{box-sizing:border-box} body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;color:var(--ink);background:var(--bg)}
+ header{background:linear-gradient(135deg,var(--navy),var(--hero));color:#fff;padding:34px 42px 26px}
+ header .kick{font-size:12.5px;letter-spacing:.14em;text-transform:uppercase;color:#bcd0f7;margin-bottom:7px}
+ header h1{margin:0;font-size:26px;font-weight:800} header p{margin:9px 0 0;font-size:14px;color:#dbe6ff;max-width:1000px}
+ .wrap{max-width:1280px;margin:0 auto;padding:26px 22px 60px}
+ section{background:#fff;border:1px solid var(--line);border-radius:14px;padding:22px 24px;margin:20px 0;box-shadow:0 1px 3px rgba(15,36,89,.05)}
+ h2{font-size:19px;color:var(--navy);margin:0 0 4px;font-weight:750} h2 .num{color:var(--mid);font-weight:800;margin-right:9px}
+ .sub{color:var(--muted);font-size:13.5px;margin:0 0 14px}
+ .chart{width:100%;height:620px} .half{height:560px}
+ .two{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+ .formula{background:var(--ice);border-left:4px solid var(--hero);padding:12px 16px;border-radius:8px;font-size:13.5px;color:#263859;margin-top:12px}
+ .formula code{background:#fff;padding:1px 7px;border-radius:5px;color:var(--navy);font-size:13px}
+ @media(max-width:900px){.two{grid-template-columns:1fr}}
+ footer{color:var(--muted);font-size:12.5px;text-align:center;padding:22px}
+</style></head><body>
+<header>
+  <div class="kick">Harbor Terminal-RL · Reward × Validator Radar</div>
+  <h1>Per-Family Radar: Validator Count vs. Reward (46 families)</h1>
+  <p>Each spoke is one task family (ordered by validator count). The radar overlays the family's
+     <b>validator count</b> against the <b>mean reward</b> earned by each reward function during training —
+     revealing whether reward tracks validator quantity across the domain mix.</p>
+</header>
+<div class="wrap">
+
+<section>
+  <h2><span class="num">01</span>Combined Radar — Validator vs. Run 1 vs. Run 2</h2>
+  <p class="sub">Three series per spoke: validator count (V*), Run 1 reward (R1*), Run 2 reward (R2*). Hover a series to read it.</p>
+  <div id="radarAll" class="chart"></div>
+  <div class="formula">
+    <b>Normalization (理论计算).</b> Axes are 0–100 so mixed scales are comparable:
+    &nbsp;<code>V* = 100·ln(1+V)/ln(1+V<sub>max</sub>)</code> (log — validator counts span ~1000×, V<sub>max</sub>=770.9),
+    &nbsp;<code>R* = 100·R/R<sub>max</sub></code> (shared R<sub>max</sub>=1.63 over both runs, so R1 and R2 are directly comparable).
+    Raw values appear in the tooltip.
+  </div>
+</section>
+
+<section>
+  <h2><span class="num">02</span>Per-Reward-Function Radars (side by side)</h2>
+  <p class="sub">Each radar has two series per spoke: the family's validator count (V*) and that run's reward (R*).
+     Where the reward shape hugs the validator shape, reward is coupled to validator quantity; where it detaches, it is decoupled.</p>
+  <div class="two">
+    <div><div id="radarR1" class="chart half"></div></div>
+    <div><div id="radarR2" class="chart half"></div></div>
+  </div>
+</section>
+
+<footer>Generated 2026-10-13 · 46 families · companion: reward_radar_combined.pdf, reward_radar_per_run.pdf · exact per-family numbers in reward_distribution_report.html</footer>
+</div>
+<script>
+const D = {"names": ["openscad", "samtools", "acoustics", "climate", "typography", "medical_img", "circuit_sim", "net_pcap", "astronomy", "doc_ocr", "microscopy", "rf_signal", "audio_sig", "gtfs", "proteomics", "mol_chem", "geology_log", "ajv_schema", "video_qc", "struct_bio", "music_score", "cartography", "phylo_tree", "container", "pointcloud", "seismology", "gdal_geo", "materials", "robotics", "finite_elem", "power_grid", "z3_constr", "sqlite", "opa_rego", "hydrology", "color_img", "blender", "duckdb", "nginx", "kicad", "web_ui_sm", "openssl_pki", "verilog", "tree_sitter", "cmake_build", "openfoam"], "full": ["openscad_parametric_cad", "samtools_bio_qc", "acoustics_room_simulation", "climate_netcdf_analysis", "typography_font_shaping", "medical_imaging", "circuit_simulation", "network_security_pcap", "astronomy_fits_photometry", "document_ocr_publishing", "microscopy_cell_analysis", "rf_signal_processing", "audio_signal_processing", "transport_gtfs_schedule", "proteomics_mass_spectrometry", "molecular_chemistry", "geology_well_log_analysis", "ajv_schema", "video_broadcast_qc", "structural_biology_pdb", "music_score_engraving", "cartography_map_rendering", "phylogenetics_tree_reconstruction", "container_supply_chain", "point_cloud_lidar", "seismology_waveform_processing", "gdal_geospatial", "materials_crystallography", "robotics_control", "finite_element_mechanics", "power_grid_simulation", "z3_constraint_system", "sqlite_analytics", "opa_rego_policy", "hydrology_raster_modeling", "color_imaging_pipeline", "blender_scene_graph", "duckdb_reporting", "nginx_routing", "kicad_pcb", "web_ui_state_machine", "openssl_pki", "verilog_rtl", "tree_sitter_grammar", "cmake_build_config", "openfoam_cfd"], "V": [0.8, 0.9, 1.4, 2.4, 2.7, 3.1, 3.2, 4.4, 4.5, 4.7, 5.0, 5.8, 5.9, 6.1, 6.3, 6.5, 6.6, 6.6, 7.2, 8.0, 8.2, 8.3, 8.7, 8.8, 9.0, 9.6, 10.3, 10.3, 12.6, 12.8, 14.9, 15.5, 18.2, 18.4, 23.4, 26.0, 30.5, 33.7, 35.9, 53.3, 81.9, 92.0, 107.9, 113.1, 357.8, 770.9], "R1": [0.0, 0.053, 0.119, 0.165, 0.166, 0.226, 0.257, 0.229, 0.51, 0.28, 0.162, 0.421, 0.513, 0.18, 0.329, 0.277, 0.316, 0.312, 0.788, 0.494, 0.478, 0.989, 0.67, 0.109, 1.63, 0.607, 0.635, 0.847, 0.554, 0.393, 0.985, 0.76, 0.853, 0.417, 0.985, 0.902, 0.96, 0.64, 0.773, 0.755, 0.976, 0.773, 0.981, 0.858, 0.71, 0.956], "R2": [0.0, 0.087, 0.088, 0.103, 0.094, 0.112, 0.363, 0.298, 0.289, 0.344, 0.35, 0.334, 0.294, 0.356, 0.485, 0.19, 0.232, 0.268, 0.764, 0.403, 0.498, 0.399, 0.888, 1.075, 0.658, 0.802, 0.233, 0.434, 0.51, 0.491, 1.5, 1.228, 0.273, 0.308, 1.437, 1.13, 0.339, 0.216, 0.291, 1.116, 1.494, 1.132, 1.495, 1.46, 1.204, 1.495], "Vstar": [8.4, 9.5, 13.2, 18.5, 19.8, 21.2, 21.6, 25.2, 25.7, 26.1, 27.0, 28.8, 29.0, 29.4, 29.8, 30.2, 30.4, 30.5, 31.6, 33.1, 33.4, 33.6, 34.2, 34.3, 34.6, 35.4, 36.5, 36.5, 39.3, 39.5, 41.6, 42.1, 44.5, 44.6, 48.0, 49.6, 51.9, 53.4, 54.3, 60.1, 66.5, 68.2, 70.6, 71.2, 88.5, 100.0], "R1star": [0.0, 3.3, 7.3, 10.1, 10.2, 13.9, 15.8, 14.1, 31.3, 17.2, 10.0, 25.8, 31.4, 11.1, 20.2, 17.0, 19.4, 19.1, 48.3, 30.3, 29.4, 60.7, 41.1, 6.7, 100.0, 37.2, 38.9, 52.0, 34.0, 24.1, 60.4, 46.6, 52.4, 25.6, 60.4, 55.3, 58.9, 39.2, 47.5, 46.3, 59.9, 47.4, 60.2, 52.6, 43.5, 58.7], "R2star": [0.0, 5.3, 5.4, 6.3, 5.8, 6.9, 22.3, 18.3, 17.7, 21.1, 21.5, 20.5, 18.1, 21.9, 29.8, 11.6, 14.2, 16.5, 46.9, 24.7, 30.5, 24.5, 54.5, 66.0, 40.3, 49.2, 14.3, 26.6, 31.3, 30.1, 92.0, 75.3, 16.7, 18.9, 88.2, 69.3, 20.8, 13.3, 17.9, 68.5, 91.6, 69.4, 91.7, 89.6, 73.9, 91.7], "Vmax": 770.9, "Rmax": 1.63};
+const HERO="#285AC7", NAVY="#0F2459", GREY="#5A739C";
+const indicators = D.names.map(n=>({name:n, max:100}));
+function tip(raw){
+  return function(p){
+    // p.value is the normalized array for the hovered series; show raw values compactly
+    const arr = (p.seriesName.indexOf('Validator')>=0)? D.V
+              : (p.seriesName.indexOf('Run 1')>=0)? D.R1 : D.R2;
+    let rows = D.names.map((n,i)=>`${n}: <b>${arr[i]}</b>`);
+    return `<div style="max-height:320px;overflow:auto;font-size:11px;line-height:1.5">`
+         + `<b style="color:${NAVY}">${p.seriesName}</b> (raw)<br/>` + rows.join('<br/>') + `</div>`;
+  };
+}
+const nameStyle = {color:'#334155', fontSize:10};
+
+echarts.init(document.getElementById('radarAll')).setOption({
+  tooltip:{confine:true, formatter:tip()},
+  legend:{data:['Validator count V*','Run 1 reward R1*','Run 2 reward R2*'],top:0,textStyle:{color:'#334155'}},
+  radar:{indicator:indicators, radius:'68%', center:['50%','55%'], splitNumber:4,
+    axisName:nameStyle, splitLine:{lineStyle:{color:'#e3e9f6'}},
+    splitArea:{areaStyle:{color:['#ffffff','#f4f7fe']}}, axisLine:{lineStyle:{color:'#cdd8ee'}}},
+  series:[{type:'radar', symbol:'none', data:[
+     {value:D.Vstar, name:'Validator count V*', lineStyle:{color:NAVY,width:2.4,type:'dashed'}, areaStyle:{opacity:0}, itemStyle:{color:NAVY}},
+     {value:D.R1star, name:'Run 1 reward R1*', lineStyle:{color:GREY,width:2}, areaStyle:{color:GREY,opacity:0.12}, itemStyle:{color:GREY}},
+     {value:D.R2star, name:'Run 2 reward R2*', lineStyle:{color:HERO,width:2.2}, areaStyle:{color:HERO,opacity:0.14}, itemStyle:{color:HERO}}
+  ]}]
+});
+
+function perRun(id, star, rcol, label){
+  echarts.init(document.getElementById(id)).setOption({
+    tooltip:{confine:true, formatter:tip()},
+    title:{text:label,left:'center',top:4,textStyle:{color:NAVY,fontSize:15}},
+    legend:{data:['Validator count V*', label+' reward R*'],top:30,textStyle:{color:'#334155'}},
+    radar:{indicator:indicators, radius:'64%', center:['50%','57%'], splitNumber:4,
+      axisName:{color:'#334155',fontSize:9}, splitLine:{lineStyle:{color:'#e3e9f6'}},
+      splitArea:{areaStyle:{color:['#ffffff','#f4f7fe']}}, axisLine:{lineStyle:{color:'#cdd8ee'}}},
+    series:[{type:'radar', symbol:'none', data:[
+      {value:D.Vstar, name:'Validator count V*', lineStyle:{color:NAVY,width:2.2,type:'dashed'}, areaStyle:{opacity:0}, itemStyle:{color:NAVY}},
+      {value:star, name:label+' reward R*', lineStyle:{color:rcol,width:2.3}, areaStyle:{color:rcol,opacity:0.16}, itemStyle:{color:rcol}}
+    ]}]
+  });
+}
+perRun('radarR1', D.R1star, GREY, 'Run 1');
+perRun('radarR2', D.R2star, HERO, 'Run 2');
+window.addEventListener('resize',()=>['radarAll','radarR1','radarR2'].forEach(id=>echarts.getInstanceByDom(document.getElementById(id))?.resize()));
+</script></body></html>

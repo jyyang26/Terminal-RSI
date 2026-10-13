@@ -1,0 +1,91 @@
+# Harbor rollout config — 56-GPU (7-node x 8 H20) Qwen3.5-35B-A3B (MoE) PPO,
+# STANDARD (batch-wise) rollout mode, DAYTONA backend.
+# EVAL-SET-AS-TRAINING-SET smoke: train pool == eval pool == terminal-bench-2 (89 tasks).
+#
+# Paths are HARDCODED (no ${...} placeholders / no launcher sed) so the config can be
+# passed straight to --custom-config-path. Used by
+#   run_35b_a3b_56gpu_daytona_ppo_n4_standard_evalset_smoke.sh
+#
+# STANDARD mode (HARBOR_ROLLOUT_MODE=standard) => slime_plugins.harbor.rollout.generate_rollout:
+# batch-wise semi-async — within each rollout step it oversamples/concurrently dispatches
+# groups (window = over_sampling_batch_size) and returns once rollout_batch_size full
+# groups are in; between steps it's synchronous (but still 1-step pipelined by train_async.py).
+#
+# PPO n=4: 64 prompts x 4 = 256 traj/step. NO within-group tail-cancel
+# (partial_group_min_units = n = 4). Group-level oversampling window > the per-step
+# prompt count so fast groups cover slow ones.
+
+# Training pool == eval pool: terminal-bench-2 full 89 tasks (overfit smoke).
+harbor_tasks_dir: /path/to/workspace/terminal-bench-2-main
+harbor_tasks_glob: "*/task.toml"
+harbor_tasks_offset: 0
+
+# Held-out EVAL pool: the SAME 89 tasks (independent cursor from training).
+harbor_eval_tasks_dir: /path/to/workspace/terminal-bench-2-main
+harbor_eval_tasks_glob: "*/task.toml"
+
+harbor_trial_defaults:
+  trials_dir: /path/to/workspace/slime-terminal-RL/checkpoints/trials
+  timeout_multiplier: 1.0
+  agent:
+    import_path: slime_plugins.harbor.agent:SlimeTerminus2
+    model_name: slime-policy
+    override_timeout_sec: 3600
+    kwargs:
+      parser_name: json
+      max_turns: 120
+      collect_rollout_details: true
+      enable_summarize: true
+      trajectory_config:
+        raw_content: true
+        linear_history: true
+      record_terminal_session: false
+      llm_backend: slime_sglang
+      llm_kwargs:
+        apply_chat_template_kwargs:
+          enable_thinking: false
+        max_context_tokens: 64000
+  verifier:
+    override_timeout_sec: 900
+  # Daytona cloud sandbox backend. Requires DAYTONA_API_KEY in the run env.
+  environment:
+    type: daytona
+    delete: true
+    override_cpus: 1
+    override_memory_mb: 2048
+    override_storage_mb: 6144
+    kwargs:
+      connection_pool_maxsize: 128
+      auto_stop_interval_mins: 90     # > 60min agent wall, so a live trial is never reaped
+      auto_delete_interval_mins: 10
+
+harbor_sample_mode: trajectory_normalized
+harbor_group_unit: trajectory
+harbor_reward_key: reward
+
+# PPO n=4 grouping (STANDARD mode). partial_group_min_units = n = 4 (no within-group
+# tail-cancel: a group needs all 4 trajectories). num_concurrent_trials caps in-flight
+# sandboxes; tune to Daytona quota. 89 tasks < 64-prompt batch => one epoch is <2 steps,
+# fine for a smoke.
+harbor_num_concurrent_trials: 96
+harbor_partial_group_min_units: 4
+harbor_trial_node_spread: true
+harbor_trial_worker_num_cpus: 0.05
+harbor_trial_worker_startup_timeout_sec: 120
+harbor_trial_worker_healthcheck_timeout_sec: 30
+harbor_kill_unhealthy_trial_workers: false
+harbor_fallback_to_inprocess_trials: false
+harbor_trial_remote_timeout_sec: 5400
+
+# Eval: whole-set, no-oversample pass over the 89 tasks. Total eval wall 3600s.
+harbor_eval_total_timeout_sec: 3600
+rollout_cleanup_function_path: slime_plugins.harbor.fully_async_rollout.cleanup_rollout
+harbor_fully_async_shutdown_drain_timeout_sec: 30
+harbor_fully_async_shutdown_join_timeout_sec: 45
+
+harbor_fail_on_conversion_error: true
+harbor_fail_on_trial_error: false
+# Accept partial groups so a single failed/leaked trial doesn't force a group retry/drop.
+harbor_require_full_rollout_groups: false
+harbor_rollout_group_attempt_multiplier: 12
+harbor_retry_missing_samples: 0

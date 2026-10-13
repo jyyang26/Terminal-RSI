@@ -1,0 +1,86 @@
+diff --git a/python/sglang/srt/managers/scheduler_components/weight_updater.py b/python/sglang/srt/managers/scheduler_components/weight_updater.py
+--- a/python/sglang/srt/managers/scheduler_components/weight_updater.py
++++ b/python/sglang/srt/managers/scheduler_components/weight_updater.py
+@@ -86,6 +86,9 @@
+     metrics_collector: Optional[Any] = None
+     offload_tags: set = field(default_factory=set)
+     stashed_model_static_state: Any = None
++    # SGLang PR #27140: recurrent GDN/KV buffers can move across pause/resume.
++    # CUDA graphs must be recaptured after an online weight update before reuse.
++    cuda_graphs_need_recapture: bool = False
+ 
+     @contextmanager
+     def _observe_weight_load(self, source: str) -> Iterator[None]:
+@@ -109,6 +112,29 @@
+             )
+             assert flush_cache_success, "Cache flush failed after updating weights"
+ 
++    def recapture_cuda_graphs_after_weight_update(self) -> None:
++        def recapture_runner(model_runner, label: str) -> None:
++            graph_runner = getattr(model_runner, "graph_runner", None)
++            if graph_runner is not None:
++                logger.info("Recapturing %s CUDA graphs after weight update", label)
++                for graph in graph_runner.graphs.values():
++                    graph.reset()
++                graph_runner.graphs.clear()
++                graph_runner.output_buffers.clear()
++                graph_runner.capture()
++            if getattr(model_runner, "piecewise_cuda_graph_runner", None) is not None:
++                logger.info("Recapturing %s piecewise CUDA graphs after weight update", label)
++                model_runner.init_piecewise_cuda_graphs()
++
++        recapture_runner(self.tp_worker.model_runner, "TP worker")
++        if self.draft_worker is not None:
++            draft_model_runner = _get_draft_model_runner(self.draft_worker)
++            if draft_model_runner is not None:
++                recapture_runner(draft_model_runner, "draft worker")
++
++    def mark_cuda_graphs_stale(self) -> None:
++        self.cuda_graphs_need_recapture = True
++
+     def update_weights_from_disk(self, recv_req: UpdateWeightFromDiskReqInput):
+         """In-place update of the weights from disk."""
+         with self._observe_weight_load("disk"):
+@@ -118,6 +144,7 @@
+                 success, message = self.draft_worker.update_weights_from_disk(recv_req)
+             if tp_success:
+                 self.flush_cache_after_weight_update(recv_req)
++                self.mark_cuda_graphs_stale()
+             if not success:
+                 logger.error(message)
+             return UpdateWeightFromDiskReqOutput(
+@@ -146,6 +173,7 @@
+             success, message = self.tp_worker.update_weights_from_distributed(recv_req)
+             if success:
+                 self.flush_cache_after_weight_update(recv_req)
++                self.mark_cuda_graphs_stale()
+             else:
+                 logger.error(message)
+             return UpdateWeightsFromDistributedReqOutput(
+@@ -162,6 +190,7 @@
+             success, message = worker.update_weights_from_tensor(recv_req)
+             if success:
+                 self.flush_cache_after_weight_update(recv_req)
++                self.mark_cuda_graphs_stale()
+             else:
+                 logger.error(message)
+             torch.distributed.barrier(group=self.tp_cpu_group)
+@@ -176,6 +205,7 @@
+                 success, message = self.draft_worker.update_weights_from_ipc(recv_req)
+             if tp_success:
+                 self.flush_cache_after_weight_update(recv_req)
++                self.mark_cuda_graphs_stale()
+             if not success:
+                 logger.error(message)
+             torch.distributed.barrier(group=self.tp_cpu_group)
+@@ -309,6 +339,10 @@
+                     if queue is not None:
+                         queue.resume_memory_occupation()
+ 
++        if self.cuda_graphs_need_recapture:
++            self.recapture_cuda_graphs_after_weight_update()
++            self.cuda_graphs_need_recapture = False
++
+         return ResumeMemoryOccupationReqOutput()
+ 
+     def pull_weights(self, recv_req: PullWeightsReqInput):

@@ -1,0 +1,108 @@
+# tmax-15k STRONGEST run, batch-384 + PINNED SANDBOX SPEC variant (2026-07-12).
+# ---------------------------------------------------------------------------
+# Fork of harbor_tmax15k_full_96gpu_27b_daytona_ppo_64k.yaml. Two families of change,
+# everything else (data pool, TB2 eval pool, agent/verifier timeouts, sample mode,
+# rate limit) inherited UNCHANGED:
+#
+#   1) PINNED SANDBOX SPEC (resource-cost cut): force EVERY Daytona sandbox to
+#      1 CPU / 2048 MB RAM / 6144 MB disk via environment.override_{cpus,memory_mb,
+#      storage_mb}. These trial-level overrides unconditionally overwrite each task's
+#      own task_env_config (harbor/environments/base.py:124-144), so a task that asks
+#      for 4 CPU / 8 G gets clamped to 1/2/6. The prior run only pinned storage (10 G)
+#      and let CPU/RAM float to each task's spec -> big aggregate footprint. This ~4-5x
+#      shrinks per-sandbox cost, which in turn frees Daytona capacity for a larger batch.
+#
+#   2) BATCH 384 CONCURRENCY (see wrapper: ROLLOUT/GLOBAL_BATCH_SIZE=384, oversample 390):
+#      the in-flight cap + sandbox semaphore must exceed the oversample window (390) or
+#      _over_sampling_group_window's 390 groups would be throttled by a 280 semaphore
+#      (rollout.py:152). Raised both to 400. Rate stays 6/s (the 600/min PER-ORG create
+#      ceiling is independent of batch; 390 sandboxes come up over ~65s).
+#
+# Window 64k, timeouts UNCHANGED (user requirement). standard skim-oversample mode
+# (wrapper forces HARBOR_ROLLOUT_MODE=standard; max_concurrent_groups below is not read
+# in standard mode, OVER_SAMPLING_BATCH_SIZE is the skim window -- kept in sync anyway).
+
+# Training pool: the full tmax-15k synthesized set (14601 task.toml dirs).
+harbor_tasks_dir: /tmp/tmax_harbor_15k_full
+harbor_tasks_glob: "*/task.toml"
+
+# Held-out EVAL pool: the 89 Terminal-Bench 2 tasks (shared fs, all nodes see it).
+harbor_eval_tasks_dir: /path/to/workspace/code/terminal-bench-2-main
+harbor_eval_tasks_glob: "*/task.toml"
+
+harbor_trial_defaults:
+  trials_dir: /path/to/workspace/slime_harbor_trials/tmax15k_strongest_b384
+  timeout_multiplier: 1.0
+  agent:
+    import_path: slime_plugins.harbor.agent:SlimeTerminus2
+    model_name: slime-policy
+    override_timeout_sec: 3600
+    kwargs:
+      parser_name: json
+      max_turns: 60
+      collect_rollout_details: true
+      enable_summarize: true
+      proactive_summarization_threshold: 20000
+      trajectory_config:
+        raw_content: true
+        linear_history: true
+      record_terminal_session: false
+      llm_backend: slime_sglang
+      llm_kwargs:
+        apply_chat_template_kwargs:
+          enable_thinking: false
+        # 4th of 5 context walls: Terminus2 agent's own budget. 64k matches the
+        # proven full-length recipe; wrapper sets the other 4 walls to 65536.
+        max_context_tokens: 64000
+  verifier:
+    override_timeout_sec: 900
+  environment:
+    type: daytona
+    delete: true
+    # >>PINNED SANDBOX SPEC (2026-07-12): clamp EVERY sandbox to 1 CPU / 2 G / 6 G,
+    # overriding each task's own spec. Cuts aggregate resource footprint ~4-5x.
+    override_cpus: 1
+    override_memory_mb: 2048
+    override_storage_mb: 6144
+    kwargs:
+      connection_pool_maxsize: 128
+      auto_stop_interval_mins: 90
+      auto_delete_interval_mins: 10
+
+harbor_sample_mode: trajectory_retokenized
+harbor_group_unit: trajectory
+harbor_reward_key: reward
+
+# >>BATCH 384 (2026-07-12): fly up to 390 concurrent groups (oversample window in the
+# wrapper), accept the first 384, drop the slow tail. Semaphore + in-flight cap raised
+# to 400 so neither throttles the 390 in-flight. n=1 -> group==task==sandbox.
+harbor_num_concurrent_trials: 400
+harbor_fully_async_max_concurrent_groups: 400
+harbor_partial_group_min_units: 1
+
+# >>DAYTONA CREATE RATE LIMIT: 600/min (=10/s) PER-ORG create ceiling is independent of
+# batch size. Keep 6/s (360/min); 390 sandboxes come up over ~65s instead of one burst.
+harbor_create_rate_per_sec: 6.0
+harbor_create_rate_burst: 6.0
+
+harbor_trial_node_spread: true
+# throughput hint (sandboxes run remotely on Daytona, not local GPUs). 400/rollout-nodes.
+harbor_trials_per_node: 50
+harbor_trial_worker_num_cpus: 0.05
+harbor_trial_worker_startup_timeout_sec: 120
+harbor_trial_worker_healthcheck_timeout_sec: 30
+harbor_kill_unhealthy_trial_workers: false
+harbor_fallback_to_inprocess_trials: false
+harbor_trial_remote_timeout_sec: 5400
+
+# Coordinator-side TOTAL eval wall: bounds the entire TB2-89 eval gather.
+harbor_eval_total_timeout_sec: 3600
+rollout_cleanup_function_path: slime_plugins.harbor.fully_async_rollout.cleanup_rollout
+harbor_fully_async_shutdown_drain_timeout_sec: 30
+harbor_fully_async_shutdown_join_timeout_sec: 45
+
+harbor_fail_on_conversion_error: true
+harbor_fail_on_trial_error: false
+harbor_require_full_rollout_groups: false
+harbor_rollout_group_attempt_multiplier: 12
+harbor_retry_missing_samples: 0

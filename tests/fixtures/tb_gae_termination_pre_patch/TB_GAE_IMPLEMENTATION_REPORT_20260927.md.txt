@@ -1,0 +1,232 @@
+# TB-GAE 首期落地与离线验收报告
+
+日期：2026-09-27。依据 `TB4_REWARD_TBGAE_PATCH.md` 第 9–10 节实施。
+
+**结果：首期数据通路和算法已实现，201/201 离线测试通过，0 失败、0 跳过。**
+其中 TB 专项 117 项，既有 Harbor/DP/角色/SC 回归 84 项；最终整套耗时 285.91 秒。
+仅使用 CPU/Gloo，没有启动集群训练、GPU/NCCL 测试或修改生产启动配置。
+
+**生产启用边界：**本次实现文档定义的首期能力，即 THD、普通 zigzag CP=1/4、单 detail、
+单 chunk、可信真实终止、KL reward 系数 0、SC/OPD 关闭。
+当前 Harbor 生产者若没有 `agent_result.metadata.termination_kind="terminated"`，
+开启后会明确失败。跨 chunk、外部截断 bootstrap、BSHD 尚未开放，不能仅凭本报告宣称
+当前 fresh_base 全量训练已可直接启用；必须先满足上述上游数据契约。
+没有用 EOS/stop、成功 reward 或 COMPLETED 状态猜测终止，也没有静默过滤困难轨迹。
+
+## 1. 文件清单
+
+| 文件 | 状态与核心改动 |
+|---|---|
+| `slime/utils/tb_gae_config.py` | 新增：严格 bool；显式 CLI > 任务 YAML > 角色顶层 > 默认 False；两项轮次参数默认 1.0；角色局部 TB 参数禁用；校验所有有效角色配置 |
+| `slime/utils/arguments.py` | 注册参数，保留显式 CLI 来源，统一 YAML 合并，创建 worker 前验证，开启时记录最终参数 |
+| `slime_plugins/harbor/tb_gae_data.py` | 新增：CPU bool 紧凑 masks、span/终止验证、全样本收集、同步切片；未知终止/多 chunk 显式失败 |
+| `slime_plugins/harbor/atif_adapter.py` | 三个入口增加 keyword-only `enable_tb_gae=False`；仅 True 记录实际输出 spans、生成两 masks |
+| `slime_plugins/harbor/rollout.py` | `_run_one_trial` 仅训练且 True 时将开关传到 adapter；eval 不生成 TB masks |
+| `slime_plugins/harbor/sample_postprocess.py` | True 时按同一 response slice 裁两 masks；GAE 后的 cap 只校验、不重裁 |
+| `slime/ray/rollout.py` | True 时 convert 验证并提升 metadata；DP 沿原 partition 传两字段；原白名单和调度不变 |
+| `slime_plugins/harbor/tb_gae.py` | 重构：标量 outcome 落最后有效 action；full masks + ragged local values；真实调用 CP wrapper；原生 slice；no_grad/detach；并行反向 affine scan |
+| `slime/backends/megatron_utils/loss.py` | 原 custom/PPO 前增加 True 分支，两角色共享；原 PPO reward 构造与 GAE 调用未重构 |
+| `slime/backends/megatron_utils/data.py` | True 时日志跳过两 masks |
+| `tests/test_tb_gae_config.py` | 新增参数、严格 schema、实际 slime YAML 合并和角色测试 |
+| `tests/test_tb_gae_zero_regression.py` | 新增冻结源码对照、Sample/cap/DP/payload、真实 loss/所有 logits 梯度/AdamW 更新，以及完整开启通路 |
+| `tests/test_tb_gae_math.py` | 新增 S3/S4、顺序参考、终止/掩码/cap、奖励和双角色测试 |
+| `tests/test_tb_gae_cp_smoke.py` | 新增实际 CPU Gloo CP=1/4 多进程验收 |
+| `tests/tb_gae_test_utils.py`、`tests/tb_gae_cp_worker.py` | 测试辅助、冻结源码加载和分布式 worker |
+| `tests/fixtures/tb_gae_pre_patch/` | 修改前工作区的 12 份源码快照及 SHA-256，不是从修改后代码生成的期望结果 |
+| `tests/artifacts/tb_gae_20260927/` | 最终 JUnit、JSON 统计、源文件哈希和 309 个受保护脚本/配置的哈希 |
+
+未改动 `Sample` dataclass、原生 `ppo_utils.py`、`cp_utils.py`、`dp_schedule.py`、
+actor/model、现有 shell/YAML 配置、`/sgl-workspace/sglang` 或既有训练运行目录。
+Python 测试均设置 `PYTHONDONTWRITEBYTECODE=1`，避免 import 时写入包目录的 pyc。
+
+## 2. 测试结果与复现
+
+下表时间来自最终 JUnit 各 test case 的累计时间，不包含全部 collection/进程启动开销。
+
+| 套件 | 用例 | 累计秒数 | 通过率 |
+|---|---:|---:|---:|
+| `test_tb_gae_config.py` | 59 | 5.089 | 100% |
+| `test_tb_gae_zero_regression.py` | 23 | 16.454 | 100% |
+| `test_tb_gae_math.py` | 27 | 0.224 | 100% |
+| `test_tb_gae_cp_smoke.py` | 8 | 256.096 | 100% |
+| 既有 Harbor adapter/postprocess、DP、角色、SC 测试 | 84 | 1.009 | 100% |
+| 合计 | **201** | **整套墙钟 285.91** | **100%** |
+
+原始结果：`tests/artifacts/tb_gae_20260927/junit.xml`；结构化统计与实现哈希：`results.json`。
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 CUDA_VISIBLE_DEVICES='' OMP_NUM_THREADS=1 \
+TORCHINDUCTOR_CACHE_DIR=/tmp/tb_gae_inductor \
+python -B -m pytest \
+  tests/test_tb_gae_config.py \
+  tests/test_tb_gae_zero_regression.py \
+  tests/test_tb_gae_math.py \
+  tests/test_tb_gae_cp_smoke.py \
+  tests/test_harbor_atif_adapter.py \
+  tests/test_harbor_sample_postprocess.py \
+  tests/utils/test_megatron_role_config.py \
+  tests/test_dp_schedule.py \
+  tests/test_ppo_sc_args.py \
+  tests/test_ppo_sc_pipeline.py \
+  -o addopts='' -p no:cacheprovider -q \
+  --junitxml=/tmp/tb_gae_final.xml --tb=short
+```
+
+环境：Python 3.12，PyTorch 2.11.0+cu129，pytest 9.0.3；测试设备 CPU，通信 Gloo。
+Black/isort 检查通过；仅检查本次修改业务文件的 `git diff --check` 通过。
+全仓库有原先存在的 docker patch 空白错误，未为此修改无关文件。
+
+额外 CPU probe：262,144 个 action token、S3、终局 reward=0.7，
+返回值最大解析误差 `3.331899642944336e-5 < 1e-4`，约 0.028 秒。
+这是单条 CPU 算子探测，不是 GPU 性能承诺或生产吞吐测量。
+
+## 3. Zero Regression 证据与范围
+
+1. **真实旧源码。** 快照在本次改代码前捕获，包括工作区已有改动。
+   测试先校验 SHA-256，再执行冻结 adapter/postprocessor/GAE dispatcher/loss；
+   原 Ray 方法逐节点 AST 抽取执行，避开构造额外 Ray actor。
+2. **缺省与显式 False。** 两种情况都对照旧源码。测试拦截 TB runtime 模块 import，
+   确保关闭通路不加载算法或 mask helper，不新增 Sample/metadata/train_data/DP masks 键。
+   Sample 序列化往返、hard cap 后内容、DP payload 键值以及 pickle 字节相同。
+3. **原生调用与计算。** spy 确认原 `get_advantages_and_returns_batch` 仍被调用。
+   对固定输入验证 RNG 状态不变，advantages/returns、core policy loss、生产 Harbor policy loss、
+   critic value loss、指标、所有 logits 梯度、AdamW 参数与优化器状态逐字节一致。
+   包含原生 gamma/lambda=1.0 与 0.97、归一化开/关。
+4. **实际 CP 通信。** localhost Gloo CP=1/4 测试对比完整结果和原生切片长度/token 身份，
+   覆盖非整除长度、极短 response、空 local response、S3/S4、all-action/interleaved observation。
+   同一 CP 组还执行冻结旧源码与新关闭路径的 targets、真实 policy/critic loss 和所有 logits 梯度逐字节对比。
+5. **未动原生代码。** `types.py/ppo_utils.py/cp_utils.py/dp_schedule.py` 与快照哈希一致；
+   309 个既有 shell/YAML 文件编辑前后哈希一致。
+
+这些证据说明**被测离线输入和 CPU/Gloo 环境**下的数值/梯度为逐 bit 一致，
+不是未运行过的 GPU/NCCL、多节点在线训练和所有可能输入的数学证明。
+关闭分支只新增 O(1) 布尔判断；没有新增 token 工作、tensor、数据通信或 mask 显存。
+控制面参数解析和分支本身不能被描述为物理意义的零 CPU 指令。
+
+### CP 原生既有边界
+
+增强测试发现：某些极短/有 padding 的样本在 CP rank 0 的 response slice 为空，
+旧 PPO dispatcher 仍做 `k[-1] += reward`，会 IndexError。为保持零回归，本次未修改这段旧行为。
+TB gather/scan/slice 对这些极端样本全部验收；旧/新关闭路径的 loss/梯度对照选择
+原生能够运行的输入（total/response 为 64/1、4096/2048）。这项范围没有被静默掩盖。
+
+## 4. S3/S4 标准配置
+
+**以下配置已被解析测试验证，但实际训练仍需满足可信终止/单 chunk 支持条件。**
+不要手工填写一个恒为 terminated 的任务参数来绕过终止验证；该值必须来自实际 agent 环境终止事件。
+
+在独立的角色配置副本顶层写入，不能放在任一角色 `overrides` 下：
+
+```yaml
+# S3
+enable_tb_gae: true
+tb_gae_gamma_turn: 1.0
+tb_gae_lambda_turn: 1.0
+
+megatron:
+  - name: q38-27b-actor
+    role: actor
+    overrides:
+      lr: 5.0e-7
+      min_lr: 5.0e-7
+  - name: q38-27b-critic
+    role: critic
+    overrides:
+      lr: 1.5e-5
+      min_lr: 1.5e-5
+      value_clip: 4.0
+      clip_grad: 100.0
+```
+
+S4 使用相同文件结构，仅将公共参数改成：
+
+```yaml
+enable_tb_gae: true
+tb_gae_gamma_turn: 0.999
+tb_gae_lambda_turn: 0.999
+```
+
+也可把这些键放入现有完整任务配置的副本顶层，任务 YAML 优先于角色公共项。
+通过现有 `MEGATRON_CONFIG_PATH` / `CONFIG_TEMPLATE` 指向副本即可，不需改生产脚本。
+未新建或修改实际生产 YAML；示例仅写在本报告中。
+
+CLI 路径（本次没有执行）：
+
+```bash
+# S3
+EXTRA_MISC_ARGS="--no-load-optim --no-load-rng --enable-tb-gae --tb-gae-gamma-turn 1.0 --tb-gae-lambda-turn 1.0" \
+  bash examples/harbor_terminal_rl/launch_27b_fresh_base_critic_warmup2.sh
+
+# S4
+EXTRA_MISC_ARGS="--no-load-optim --no-load-rng --enable-tb-gae --tb-gae-gamma-turn 0.999 --tb-gae-lambda-turn 0.999" \
+  bash examples/harbor_terminal_rl/launch_27b_fresh_base_critic_warmup2.sh
+
+# 显式回到原生；覆盖 YAML 中的 true
+EXTRA_MISC_ARGS="--no-load-optim --no-load-rng --no-enable-tb-gae" \
+  bash examples/harbor_terminal_rl/launch_27b_fresh_base_critic_warmup2.sh
+```
+
+不需要 `--custom-advantage-function-path`。保留 `--advantage-estimator ppo`；
+critic 的通用 custom hook 清空规则不变，TB 由其之前的公共开关分支执行。
+S3→S4 仅改两项轮次参数，不同时改 reward/warmup/数据。当前 fresh_base reward 不是本文历史 S2 reward，
+比较时应明确所用基线。
+
+---
+
+## 附：可运行性复核（2026-09-29，审阅者补充）
+
+> 结论：**当前 Harbor 生产链路无法直接启用 TB-GAE。** 按第 4 节的 S3/S4 启动命令拉起，会通过全部
+> 配置校验、正常进入训练，但在**第一次 rollout 转换**时对**每一条 trial** 抛 `ValueError` 而失败。
+> 本报告第 9–13 行的"生产启用边界"已诚实地预告了这一点；下面把它定位到具体代码，并给出修复项。
+
+### 阻塞点：`termination_kind` 无生产者（硬失败，非降级）
+
+1. **消费端会硬失败。** `enable_tb_gae=True` 时，`slime_plugins/harbor/atif_adapter.py:91-95` 调用
+   `trial_termination_kind(result)`，后者在 `slime_plugins/harbor/tb_gae_data.py:16-30` 读取
+   `agent_result.metadata["termination_kind"]`，若不严格等于 `"terminated"` 直接抛
+   `ValueError("TB-GAE requires explicit agent_result.metadata.termination_kind='terminated'…")`。
+   `atif_adapter.py:826-827` 再次强制同一条件。
+
+2. **生产端根本不写这个字段。** 在整个 Harbor 源码树中 `termination_kind` 的**生产者数量为 0**
+   （`grep -rn termination_kind harbor/` 无命中）。Terminus-2 只在
+   `harbor/src/harbor/agents/terminus_2/terminus_2.py:1662` 写入
+   `context.metadata = {"n_episodes", "api_request_times_msec", "summarization_count"}`（外加可选
+   `all_messages`），**没有** `termination_kind`。因此每条 trial 的 metadata 都缺该键。
+
+3. **后果是整轮 rollout 失败。** 生产配置 `harbor_fail_on_conversion_error: true`，转换异常不会被
+   吞掉，会中止该 rollout；不存在"退回原 GAE"的静默降级路径。
+
+4. **离线测试没有覆盖这条真实通路。** `tests/test_tb_gae_math.py:121/139/159` 是**手工注入**
+   `termination_kind="terminated"` 的 fixture，甚至专门断言"缺失时应抛错"（:139-140）。所以
+   "201/201 通过"证明的是"代码在给定契约时正确、在缺契约时正确报错"，**不**证明"接上真实
+   Harbor 数据即可端到端跑通"。报告第 3 节（"被测离线输入…不是…所有可能输入的数学证明"）已限定了
+   这一范围，但第 4 节的 S3/S4 启动命令看起来可直接运行，容易造成"配置校验通过=可训练"的误判。
+
+### 与 SC 的本质差别（为何 SC 可跑而 TB-GAE 不可）
+
+SC 的上游契约是 **top-k logprobs**，即向 SGLang 请求 `top_logprobs_num=k`（`slime_plugins/harbor/llm.py:135-150`），
+这是引擎**原生能力**且已在 2026-09-26 真实 GPU 冒烟中验证。TB-GAE 的上游契约是
+`metadata.termination_kind`，是一个**目前无人写入**的字段。差别不在算法实现，而在数据契约能否被现有栈满足。
+
+### 使其可运行所需的最小修复（三选一，按推荐排序）
+
+- **（推荐）在真实终止事件处补生产者。** 由 Terminus-2/adapter 依据 agent 实际结束原因写入
+  `context.metadata["termination_kind"]`：仅当轨迹是**自然完成/环境判定 done**（非达到 `max_turns`
+  截断、非异常/取消）时才置 `"terminated"`；截断或未完成置其它值（如 `"truncated"`）。注意本报告
+  第 116 行的告诫——该值**必须来自真实终止事件**，不能填一个"恒为 terminated"的常量绕过校验，否则
+  会把被截断的困难轨迹当作真实终止来 bootstrap，污染优势估计。
+- **实现 bootstrap 协议。** 第 12 行提到的"外部截断 bootstrap"尚未开放；实现后即可正确处理
+  非终止尾部，而不必要求每条轨迹都自然终止。
+- **暂缓 TB-GAE，先跑 SC。** SC 已具备可运行条件（见同目录 `SC_IMPLEMENTATION_REPORT_20260929.md`
+  与新增的 `examples/harbor_terminal_rl/launch_27b_run2_warmcritic_sc.sh`）。
+
+### 其它次要观察
+
+- **单 chunk 限制**：`tb_gae_data.py:61-63` 要求 `is_last_chunk=True` 且单块；`trajectory_retokenized`
+  下若一条 trial 因超长被切成多 chunk（本模型 256k + 229376 压缩阈值下可能发生），同样会抛
+  "requires a complete terminated single chunk"。启用前需确认目标任务在 max_turns 课程较大时不会触发多 chunk。
+- **子 agent**：`atif_adapter.py` 在 `include_subagents=True` 时对 TB-GAE 直接报错；需确保
+  `harbor_include_subagent_rollouts=false`（当前默认满足）。
+- **配置校验本身无误**：`validate_tb_gae_config`（`slime/utils/tb_gae_config.py:109-144`）对生产 argv
+  （S3：ppo/thd/CP4/kl0/retokenized…）实测**通过**。问题不在校验，而在校验之后的运行期数据契约。
+

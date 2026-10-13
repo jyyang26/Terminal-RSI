@@ -1,0 +1,101 @@
+# FULL TRAINING config: TerminalWorld 1530 self-contained-Dockerfile tasks on
+# Daytona, 96-GPU Qwen3.5-27B fully-async. GRPO with BINARY checker reward only.
+#
+# Validated by the tiny-8 smoke (mean reward 0.69, real PASSED/FAILED scoring):
+#   - Daytona builds each sandbox from per-task environment/Dockerfile
+#     (Image.from_dockerfile; fires because task.toml has no docker_image)
+#   - verifier tests/test.sh -> /logs/verifier/reward.txt scores correctly
+#     (unlike valid359, whose runtime setup.sh injection Daytona never ran)
+#
+# REWARD DESIGN (per user request):
+#   - process/partial reward (CTRF) OFF  -> set via run wrapper:
+#     CUSTOM_REWARD_POST_PROCESS_PATH="" (no --custom-reward-post-process-path),
+#     so the only reward is the binary terminal checker (harbor_reward_key: reward).
+#   - entropy loss OFF -> ENTROPY_COEF=0.0 in the wrapper (train_loss.py gates
+#     with_entropy on entropy_coef != 0; 0.0 => no entropy term in the loss).
+#   - token-capping postprocess KEPT (cap_total_tokens_*; not reward shaping).
+#
+# CONCURRENCY (user choice): n=20 samples/group, partial cutoff accepts first 16
+# and cancels the 4-trial tail, 20 groups in flight => 320 concurrent sandboxes.
+# 320 * 10GiB = 3200GiB < tier4 5000GiB quota. 320-concurrent capacity proven.
+
+harbor_tasks_dir: /path/to/workspace/code/harbor-code-synthesis/TerminalWorld/unpacked/by_id
+harbor_tasks_glob: "*/task.toml"
+harbor_tasks_offset: 0
+
+harbor_trial_defaults:
+  trials_dir: /path/to/workspace/slime_harbor_trials/terminalworld_full1530_96gpu_27b_daytona_n20_partial16
+  timeout_multiplier: 1.0
+  agent:
+    import_path: slime_plugins.harbor.agent:SlimeTerminus2
+    model_name: slime-policy
+    override_timeout_sec: 1800
+    kwargs:
+      parser_name: json
+      max_turns: 60
+      collect_rollout_details: true
+      enable_summarize: true
+      # context-wall fix proven in the valid359 + tiny runs.
+      proactive_summarization_threshold: 20000
+      trajectory_config:
+        raw_content: true
+        linear_history: true
+      record_terminal_session: false
+      llm_backend: slime_sglang
+      llm_kwargs:
+        apply_chat_template_kwargs:
+          enable_thinking: false
+        max_context_tokens: 64000
+  environment:
+    type: daytona
+    delete: true
+    override_storage_mb: 10240
+    kwargs:
+      connection_pool_maxsize: 128
+      # Backstop against sandbox LEAKS (a stop() that never ran -- creation-race
+      # or shutdown-cancellation orphan). Daytona's auto_delete clock starts
+      # only AFTER a sandbox is STOPPED, so auto_delete alone is inert while a
+      # leaked sandbox stays `started` forever (auto_stop defaults to 0 = never).
+      # MUST set auto_stop too: leaked sandbox idle -> auto_stop 45min ->
+      # auto_delete 10min later. auto_stop (45) > override_timeout_sec (1800s
+      # =30min) so a live trial is never reaped mid-run. Healthy trials are
+      # deleted immediately by stop(); these knobs only catch leaks.
+      auto_stop_interval_mins: 45
+      auto_delete_interval_mins: 10
+
+harbor_sample_mode: trajectory_retokenized
+harbor_group_unit: trajectory
+harbor_reward_key: reward
+
+# n=20 launched per group, accept first 16 trainable trajectories, cancel the
+# 4-trial tail; 20 groups in flight => 320 concurrent sandboxes (proven capacity,
+# 3200GiB < 5000GiB tier4 quota).
+harbor_num_concurrent_trials: 320
+harbor_fully_async_max_concurrent_groups: 20
+harbor_partial_group_min_units: 16
+
+harbor_trial_node_spread: true
+# 320 trials / 8 rollout nodes = 40 trial-worker actors/node (num_cpus 0.05 => 2 CPU/node;
+# sandbox compute is remote). trials_per_node * rollout_nodes (40*8=320) >= num_concurrent.
+harbor_trials_per_node: 40
+harbor_trial_worker_num_cpus: 0.05
+harbor_trial_worker_startup_timeout_sec: 120
+harbor_trial_worker_healthcheck_timeout_sec: 30
+harbor_kill_unhealthy_trial_workers: false
+harbor_fallback_to_inprocess_trials: false
+harbor_trial_remote_timeout_sec: 21600
+rollout_cleanup_function_path: slime_plugins.harbor.fully_async_rollout.cleanup_rollout
+harbor_fully_async_shutdown_drain_timeout_sec: 30
+harbor_fully_async_shutdown_join_timeout_sec: 45
+
+harbor_fail_on_conversion_error: true
+harbor_fail_on_trial_error: false
+# Relaxed from true: if a few sandboxes leak/fail and a group can't reach the
+# full 16 units, train on the partial batch (>=partial_group_min_units) instead
+# of crashing the whole run with a RuntimeError. This is what hard-killed the
+# previous run at step 20 (15/16 groups -> raise).
+harbor_require_full_rollout_groups: false
+# Bumped 8 -> 12: more retry headroom for the group attempt budget so transient
+# Daytona create failures don't exhaust attempts before enough groups complete.
+harbor_rollout_group_attempt_multiplier: 12
+harbor_retry_missing_samples: 0
