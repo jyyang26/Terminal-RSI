@@ -63,7 +63,7 @@ def ensure_daytona_api_proxy() -> list[str]:
     NOT read ``http_proxy``/``https_proxy`` from the environment. Verified on a
     worker node::
 
-        os.environ['https_proxy'] = 'http://star-proxy.oa.com:3128'
+        os.environ['https_proxy'] = 'http://<proxy-host>:<port>'
         Configuration().proxy  ->  None          # env ignored
 
     It proxies only when ``Configuration.proxy`` is set, in which case rest.py
@@ -122,7 +122,7 @@ def ensure_daytona_s3_proxy() -> None:
     (us-east-1). It does this via ``obstore.S3Store``, whose Rust HTTP client does
     NOT read ``HTTPS_PROXY`` from the environment — and worse, the SDK builds the
     store inside ``isolated_env()`` which *clears* os.environ first. On networks
-    where AWS S3 is only reachable through a proxy (these nodes need star-proxy),
+    where AWS S3 is only reachable through a proxy (e.g. clusters without direct internet egress),
     every signed HEAD/PUT to that bucket then times out after 10 retries (~58s),
     surfacing as ``Failed to create sandbox: Generic S3 error``. Single/anon requests
     that avoid the S3 path looked fine, which sent us chasing rate limits / outages

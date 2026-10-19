@@ -109,11 +109,11 @@ export CODE_ROOT=/path/to/workspace/code
 mkdir -p "${CODE_ROOT}"
 
 git clone \
-  git@git.woa.com:TencentAILab/nlp/research/self_improving/slime-terminal-RL.git \
+  https://github.com/jyyang26/Terminal-RSI.git \
   "${CODE_ROOT}/slime-v0.3-harbor"
 
 git clone \
-  git@git.woa.com:TencentAILab/nlp/research/self_improving/harbor.git \
+  https://github.com/harbor-framework/harbor.git \
   "${CODE_ROOT}/harbor"
 ```
 
@@ -225,7 +225,7 @@ CUDA、PyTorch、Megatron、Ray、SGLang 或 Apptainer。
 
 ## 7. 网络与 proxy
 
-W&B、Daytona 和镜像 registry 可能需要 `star-proxy`，而 Ray、SGLang 控制面和
+W&B、Daytona 和镜像 registry 可能需要 `HTTP(S)_PROXY`，而 Ray、SGLang 控制面和
 NCCL 的节点间流量必须直连。基础 launcher 会在四个 Ray 节点加入后，将实际节点
 IP 动态追加到 `NO_PROXY/no_proxy` 并传入 Ray runtime env。
 

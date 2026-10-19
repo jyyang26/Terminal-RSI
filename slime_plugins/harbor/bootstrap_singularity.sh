@@ -7,11 +7,12 @@ export HARBOR_STAGING="/staging/env_files"
 mkdir -p "$WORKDIR"
 
 export DEBIAN_FRONTEND=noninteractive
-export http_proxy="${http_proxy:-http://star-proxy.oa.com:3128}"
-export https_proxy="${https_proxy:-http://star-proxy.oa.com:3128}"
+# Egress proxy is inherited from the caller (empty = direct internet access).
+export http_proxy="${http_proxy:-${HTTP_PROXY:-}}"
+export https_proxy="${https_proxy:-${HTTPS_PROXY:-}}"
 export HTTP_PROXY="${HTTP_PROXY:-$http_proxy}"
 export HTTPS_PROXY="${HTTPS_PROXY:-$https_proxy}"
-export no_proxy="${no_proxy:-localhost,127.0.0.1,mirror.ccs.tencentyun.com}"
+export no_proxy="${no_proxy:-localhost,127.0.0.1}"
 
 _harbor_log() {
   printf '[harbor][%s] %s\n' "$(date -Iseconds)" "$*" >&2

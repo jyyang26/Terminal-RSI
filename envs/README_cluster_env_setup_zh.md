@@ -12,7 +12,7 @@
 
 ```bash
 NEW_IP=<新节点 IP>
-HEAD=29.127.33.153
+HEAD=head-node
 
 # 1) 补齐依赖（CP>1 必需 fla 0.4.2；Harbor 沙箱必需 daytona/tenacity）
 ssh $NEW_IP '
@@ -23,7 +23,7 @@ ssh $NEW_IP '
 '
 
 # 1b) 用旧 worker 做基准，补齐【所有】缺失包（一次到位，不要打地鼠）
-REF=29.232.240.247
+REF=node-03
 ssh $REF  'pip list --format=freeze' | sort > /tmp/pip_ref.txt
 ssh $NEW_IP 'pip list --format=freeze' | sort > /tmp/pip_new.txt
 python3 - <<'EOF' > /tmp/spec.txt
@@ -40,7 +40,7 @@ bash envs/verify_node_env.sh $NEW_IP
 ssh $NEW_IP '
   ray stop --force; sleep 3
   mkdir -p /tmp/slime-harbor-ray
-  ray start --address=29.127.33.153:6379 --num-gpus 8 --temp-dir /tmp/slime-harbor-ray
+  ray start --address=head-node:6379 --num-gpus 8 --temp-dir /tmp/slime-harbor-ray
 '
 
 # 4) 复核集群规模
@@ -54,24 +54,24 @@ ray status --address=$HEAD:6379 | grep -E "GPU|node_"
 | 项 | 值 |
 |---|---|
 | 节点数 | **11**（1 head + 10 worker），每节点 **8 × H20 (95 GiB)** = **88 GPU** |
-| Ray head | `29.127.33.153:6379` |
+| Ray head | `head-node:6379` |
 | Ray temp dir | `/tmp/slime-harbor-ray`（各节点本地） |
 | Host RAM | 每节点 **2265 GB** |
 
 ### 节点 IP 清单
 
 ```
-head : 29.127.33.153
-N02  : 29.119.97.70
-N03  : 29.119.99.88
-N04  : 29.127.68.155
-N05  : 29.127.68.53
-N06  : 29.127.69.167
-N07  : 29.127.81.202
-N08  : 29.232.240.217
-N09  : 29.232.240.247
-N10  : 29.119.98.153      <- 2026-08-12 新增
-N11  : 29.127.82.134      <- 2026-08-12 新增
+head : head-node
+N02  : node-04
+N03  : node-05
+N04  : node-06
+N05  : node-07
+N06  : node-08
+N07  : node-09
+N08  : node-10
+N09  : node-03
+N10  : node-11      <- 2026-08-12 新增
+N11  : node-12      <- 2026-08-12 新增
 ```
 
 > 节点之间 `ping` 不通是 ICMP 被禁，TCP:22 正常，不影响 Ray/NCCL。
@@ -238,7 +238,7 @@ grep -c register_routing_replay        /root/Megatron-LM/megatron/core/transform
 
 ```bash
 bash envs/verify_node_env.sh              # 全集群
-bash envs/verify_node_env.sh 29.119.98.153  # 单节点
+bash envs/verify_node_env.sh node-11  # 单节点
 ```
 
 **2026-08-12 实测结果：11/11 节点 IDENTICAL**（唯一差异是非交互 shell 的 `nvcc` PATH，无影响）。
@@ -283,5 +283,5 @@ printf 'export DAYTONA_API_KEY=...\nexport WANDB_API_KEY=...\n' > /tmp/bs512_key
 |---|---|
 | 2026-08-12 (3) | **发现新节点比旧 worker 少 98 个包**，不是先前以为的 3 个。`88cp8-128k` 首启后 rollout 在 N11 上抛 144 次 `ModuleNotFoundError: dirhash` —— 而 `dirhash` 是 harbor 在**函数体内惰性 import** 的，模块级探测永远抓不到。已按"旧 worker 整包集合"一次补齐 98 个包（`--no-deps`，核心版本未变），并把 `verify_node_env.sh` 的判据改为 **pip 全集缺失 diff + 基准换成旧 worker**，`nvitop` 列入白名单。复检 11/11 IDENTICAL。教训：跨节点环境对齐只能用整包集合，逐个列名/import 探测都会漏。 |
 | 2026-08-12 (2) | **补 `shortuuid==1.0.11` + `litellm==1.89.3` 到 N10/N11**。起因：`88cp4-84k` 首次启动后 rollout 在 N11 上抛 280 次 `ModuleNotFoundError: shortuuid`，该节点 3 个 trial worker 全废、有效并发 105→70，训练降级但未中断（`harbor_fail_on_trial_error: false` 兜住了）。根因是**自检脚本只逐项列包名，漏掉传递依赖**。已把 `verify_node_env.sh` 改为端到端 import 探测，它随即又发现 `litellm` 也缺。教训：新节点必须跑 §6 自检并看到 `harbor_imports=OK`。 |
-| 2026-08-12 | 新增 N10 (29.119.98.153) / N11 (29.127.82.134)：装 fla 0.4.2 + tenacity 9.1.4 + daytona 0.168.0，建 Triton 缓存目录，join Ray。集群 9→11 节点、72→88 GPU。全 11 节点实测环境一致。 |
+| 2026-08-12 | 新增 N10 (node-11) / N11 (node-12)：装 fla 0.4.2 + tenacity 9.1.4 + daytona 0.168.0，建 Triton 缓存目录，join Ray。集群 9→11 节点、72→88 GPU。全 11 节点实测环境一致。 |
 | 2026-08-11 | 全部 9 个节点 fla 0.4.1 → 0.4.2（启用 hybrid GDN CP）。 |

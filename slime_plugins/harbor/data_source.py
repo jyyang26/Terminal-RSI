@@ -212,7 +212,7 @@ def _load_task_entries(args) -> list[dict[str, Any]]:
                 sif_cache_dir=getattr(args, "harbor_stable_sif_cache_dir", None),
                 limit=getattr(args, "harbor_stable_tasks_limit", None),
                 offset=int(getattr(args, "harbor_stable_tasks_offset", 0) or 0),
-                apt_proxy=getattr(args, "harbor_stable_apt_proxy", "http://star-proxy.oa.com:3128"),
+                apt_proxy=getattr(args, "harbor_stable_apt_proxy", None) or os.environ.get("APT_PROXY", ""),
             )
     if entries is None:
         task_dir = getattr(args, "harbor_tasks_dir", None)

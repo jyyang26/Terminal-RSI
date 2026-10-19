@@ -467,7 +467,7 @@ PYTHONDONTWRITEBYTECODE=1 OMP_NUM_THREADS=1 \
 |---|---|
 | 成功Job | `sc_singlenode_27b_20260926_095713-r3` |
 | 时间UTC | 2026-09-26 10:12:55.867–10:27:51.158 |
-| 节点 | 10.0.0.2，单机8×H20 |
+| 节点 | <node-ip>，单机8×H20 |
 | 训练/采样布局 | 训练TP2×PP2×CP1×DP1=4卡；SGLang TP4=4卡 |
 | 规模 | 1 rollout；Critic和Actor各Step0；2条Harbor轨迹 |
 | Daytona并发 | 2，不是20并发压力测试 |

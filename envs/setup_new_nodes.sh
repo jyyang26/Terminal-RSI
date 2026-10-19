@@ -1,7 +1,7 @@
 #!/bin/bash
 # setup_new_nodes.sh -- bring freshly-allocated nodes up to the cluster baseline.
 #
-#   bash envs/setup_new_nodes.sh 29.1.2.3 29.1.2.4 ...      # explicit IPs
+#   REF_IP=<ref-worker-ip> HEAD_IP=<head-ip> bash envs/setup_new_nodes.sh <ip> <ip> ...  # explicit IPs
 #   bash envs/setup_new_nodes.sh --from-node-ip-list        # every IP in $NODE_IP_LIST
 #                                                            that is not already in Ray
 #
@@ -24,8 +24,8 @@
 # (gradio / nemo / sklearn ...) and using it as the baseline makes every worker look broken.
 set -uo pipefail
 
-REF_IP="${REF_IP:-29.232.240.247}"     # proven rollout-capable worker
-HEAD_IP="${HEAD_IP:-29.127.33.153}"
+REF_IP="${REF_IP:?set REF_IP to a proven rollout-capable worker}"
+HEAD_IP="${HEAD_IP:?set HEAD_IP to the Ray head node}"
 RAY_PORT="${RAY_PORT:-6379}"
 SSH="ssh -o StrictHostKeyChecking=no -o ConnectTimeout=15 -o BatchMode=yes"
 

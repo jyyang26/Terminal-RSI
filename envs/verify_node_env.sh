@@ -1,8 +1,9 @@
 #!/bin/bash
 # 集群环境一致性自检。
 #
-#   bash envs/verify_node_env.sh              # 检查全部 11 个节点，与 head 做 diff
-#   bash envs/verify_node_env.sh 29.119.98.153  # 只检查一个节点
+#   REF_IP=<ref-worker-ip> HEAD_IP=<head-ip> ALL_NODE_IPS="<ip1> <ip2> ..." \
+#     bash envs/verify_node_env.sh             # 检查全部节点，与参考节点做 diff
+#   REF_IP=... HEAD_IP=... bash envs/verify_node_env.sh <node-ip>   # 只检查一个节点
 #
 # 退出码 0 = 全部一致且无缺失；非 0 = 有节点不一致（详情见输出）。
 #
@@ -12,17 +13,15 @@ set -uo pipefail
 
 # 基准用一个【已验证能跑 rollout 的旧 worker】而非 head：head 上装了大量 dev 工具
 # (gradio/nemo/sklearn...)，拿它当基准会让每个 worker 都误报缺包。
-REF_IP="${REF_IP:-29.232.240.247}"
-HEAD_IP="${HEAD_IP:-29.127.33.153}"
-ALL_IPS=(
-  29.127.33.153 29.119.97.70 29.119.99.88 29.127.68.155 29.127.68.53 29.127.69.167
-  29.127.81.202 29.232.240.217 29.232.240.247 29.119.98.153 29.127.82.134
-  # 2026-08-17: +6 nodes -> 17 nodes / 136 GPU (for the bs512 / 128-train-GPU topology)
-  29.127.80.173 29.232.225.174 29.127.50.220 29.191.192.123 29.127.69.124 29.119.83.182
-)
-# The authoritative list is the platform hostfile, which stays current even when this
-# shell's NODE_IP_LIST / TAIJI_HOST_NUM are stale (they are captured at session start):
-#   awk '{print $1}' /etc/taiji/hostfile
+REF_IP="${REF_IP:?请指定参考节点 IP (REF_IP=<proven rollout worker>)}"
+HEAD_IP="${HEAD_IP:?请指定 Ray Head 节点 IP (HEAD_IP=<head>)}"
+# 全部节点 IP（空格或逗号分隔）；只检查单个节点时可省略，直接把 IP 作为参数传入。
+# 平台 hostfile 通常是最可靠的来源，例如: ALL_NODE_IPS="$(awk '{print $1}' /path/to/hostfile)"
+read -r -a ALL_IPS <<< "$(echo "${ALL_NODE_IPS:-}" | tr ',' ' ')"
+if [ $# -eq 0 ] && [ ${#ALL_IPS[@]} -eq 0 ]; then
+  echo "请通过 ALL_NODE_IPS 或命令行参数指定待检查的节点 IP" >&2
+  exit 2
+fi
 
 # ---- 探针：在目标节点上采集环境指纹 ----------------------------------------
 PROBE=$(cat <<'PROBE_EOF'

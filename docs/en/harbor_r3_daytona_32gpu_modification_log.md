@@ -312,8 +312,8 @@ Megatron-to-HF export 兼容改动：
 - Ray 资源已正常到 32 GPU，placement group 成功分配到 4 个节点。
 - SGLang 两个 8-GPU rollout engine 已成功启动并通过 health check。
 - Daytona/Harbor trial worker 已启动：
-  - node `29.81.242.16`, `max_concurrency=64`
-  - node `29.81.244.184`, `max_concurrency=64`
+  - node `node-01`, `max_concurrency=64`
+  - node `node-02`, `max_concurrency=64`
 - Megatron train actor 已启动到 tokenizer/init，并进入 torch_dist checkpoint load。
 
 最终失败点：

@@ -75,7 +75,7 @@ launch_27b_run2_warmcritic_ctrf82.sh          ← 本轮的薄封装：只设「
 ### 2.1 集群有 120 张空闲卡
 
 ```bash
-RAY_ADDRESS=10.0.0.4:23456 ray status | grep GPU
+RAY_ADDRESS=<node-ip>:23456 ray status | grep GPU
 # 期望：0.0/120.0 GPU
 ```
 
@@ -246,7 +246,7 @@ ls /path/to/workspace/slime_harbor_trials/q38_27b_ppo_256k_${TAG} | wc -l
 
 ```bash
 JOB=$(cat /tmp/prod2_job.txt); LOG=$(cat /tmp/prod2_log.txt); TAG=$(cat /tmp/prod2_tag.txt)
-echo "job:    $(RAY_ADDRESS=10.0.0.4:23456 ray job status $JOB 2>&1 | grep -oE 'RUNNING|SUCCEEDED|FAILED|STOPPED' | head -1)"
+echo "job:    $(RAY_ADDRESS=<node-ip>:23456 ray job status $JOB 2>&1 | grep -oE 'RUNNING|SUCCEEDED|FAILED|STOPPED' | head -1)"
 echo "perf:   $(grep -oE 'perf [0-9]+:' "$LOG" | sort -u -t' ' -k2 -n | tail -1)"
 echo "steps:  $(grep -c 'Timer train end' "$LOG") actor steps done"
 echo "errors: $(grep -cE 'ActorUnavailableError|CUDA error|OutOfMemory|AssertionError|^Traceback' "$LOG")"
@@ -292,7 +292,7 @@ done; wait
 ```
 
 每个节点应是 `gpus=8`。少于 8 或报错说明有卡掉了总线——run #1 就是这样死的
-（节点 `10.0.0.5` 的 GPU 6 掉出 PCI 总线，`ray` 抛 `ActorUnavailableError`）。
+（节点 `<node-ip>` 的 GPU 6 掉出 PCI 总线，`ray` 抛 `ActorUnavailableError`）。
 
 ---
 
@@ -300,7 +300,7 @@ done; wait
 
 ```bash
 JOB=$(cat /tmp/prod2_job.txt)
-RAY_ADDRESS=10.0.0.4:23456 ray job stop "$JOB"
+RAY_ADDRESS=<node-ip>:23456 ray job stop "$JOB"
 ```
 
 **这是正确的停止方式**，不要 `ray stop --force`（会杀掉整个 15 节点集群），
@@ -311,7 +311,7 @@ RAY_ADDRESS=10.0.0.4:23456 ray job stop "$JOB"
 
 ```bash
 sleep 60
-RAY_ADDRESS=10.0.0.4:23456 ray status | grep GPU     # 期望 0.0/120.0
+RAY_ADDRESS=<node-ip>:23456 ray status | grep GPU     # 期望 0.0/120.0
 tail -3 /tmp/watchdog_prod2.log                          # 期望 [watchdog] done
 ```
 

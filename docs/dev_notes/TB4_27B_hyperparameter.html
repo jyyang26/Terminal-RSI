@@ -2431,7 +2431,7 @@ shaped 最大值从 <b>9.71 降到 3.00</b>（压缩 3.2×），而均值几乎�
 <thead><tr><th>参数</th><th class="num">取值</th><th>说明</th></tr></thead>
 <tbody>
 <tr><td>拓扑</td><td class="num">64 train + 56 infer</td>
-  <td>15 节点 × 8 GPU = 120。节点 10.0.0.5 因 GPU 6 掉出 PCI 总线已被剔除</td></tr>
+  <td>15 节点 × 8 GPU = 120。节点 <node-ip> 因 GPU 6 掉出 PCI 总线已被剔除</td></tr>
 <tr><td>TP × CP × PP ⇒ DP</td><td class="num">4 × 4 × 2 ⇒ 2</td>
   <td>TP ≤ 4 是<b>硬约束</b>：num_query_groups = 4，Megatron 要求 num_query_groups % TP == 0</td></tr>
 <tr><td>CP=4 依赖</td><td class="num">fla-core ≥ 0.4.2</td>

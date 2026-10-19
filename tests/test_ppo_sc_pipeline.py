@@ -201,8 +201,8 @@ def test_real_slime_validation_loads_common_sc_before_role_copies(monkeypatch, t
     from pathlib import Path
 
     root = Path(__file__).resolve().parents[1]
-    original = root / "examples/harbor_terminal_rl/megatron_roles_27b_criticlr30x_warmcritic.yaml"
-    derived = original.with_name("megatron_roles_27b_criticlr30x_warmcritic_sc_shadow.yaml")
+    original = root / "examples/terminal_rsi/configs/megatron_roles_rpr1.yaml"
+    derived = root / "tests/fixtures/megatron_roles_rpr1_sc_shadow.yaml"
     for role_file, enabled in ((original, False), (derived, True)):
         monkeypatch.setattr(
             sys,

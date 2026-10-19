@@ -14,7 +14,8 @@ from slime.utils.score_centering_validate import validate_score_centering_args
 NUM_GPUS = 0
 pytestmark = pytest.mark.unit
 ROOT = Path(__file__).resolve().parents[1]
-ROLES = ROOT / "examples/harbor_terminal_rl/megatron_roles_27b_criticlr30x_warmcritic.yaml"
+ROLES = ROOT / "examples/terminal_rsi/configs/megatron_roles_rpr1.yaml"
+SC_SHADOW_ROLES = ROOT / "tests/fixtures/megatron_roles_rpr1_sc_shadow.yaml"
 
 
 def make_args(**updates):
@@ -196,7 +197,7 @@ def test_common_config_and_custom_yaml_precedence_and_aliases():
 
 def test_derived_shadow_file_only_adds_common_sc():
     original = yaml.safe_load(ROLES.read_text())
-    shadow = yaml.safe_load(ROLES.with_name("megatron_roles_27b_criticlr30x_warmcritic_sc_shadow.yaml").read_text())
+    shadow = yaml.safe_load(SC_SHADOW_ROLES.read_text())
     assert original["megatron"] == shadow["megatron"]
     base = make_args()
     configure_score_centering(base, role_config=shadow)

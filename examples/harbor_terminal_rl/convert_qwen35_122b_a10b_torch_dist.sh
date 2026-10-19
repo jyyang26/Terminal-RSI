@@ -13,9 +13,9 @@ set -euo pipefail
 # TP1 x PP8 single-node convert; the resulting dist checkpoint is re-loadable at any
 # training TP/PP/EP layout (e.g. the training run's TP2 x PP2 x EP16).
 
-SLIME_DIR=${SLIME_DIR:-/path/to/workspace/slime-terminal-RL}
-HF_CKPT=${HF_CKPT:-/path/to/shared_storage/hf_models/Qwen/Qwen3.5-122B-A10B}
-SAVE_DIR=${SAVE_DIR:-/path/to/shared_storage/hf_models/Qwen/Qwen3.5-122B-A10B_torch_dist}
+SLIME_DIR=${SLIME_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}
+HF_CKPT=${HF_CKPT:-/path/to/Qwen3.5-122B-A10B}
+SAVE_DIR=${SAVE_DIR:-${HF_CKPT%/}_torch_dist}
 MODEL_SCRIPT=${MODEL_SCRIPT:-${SLIME_DIR}/scripts/models/qwen3.5-122B-A10B.sh}
 NPROC_PER_NODE=${NPROC_PER_NODE:-8}
 MASTER_PORT=${MASTER_PORT:-12377}

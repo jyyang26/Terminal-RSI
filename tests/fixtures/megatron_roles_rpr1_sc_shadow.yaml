@@ -1,0 +1,31 @@
+# Test fixture: examples/terminal_rsi/configs/megatron_roles_rpr1.yaml plus a shadow-mode
+# score_centering block (sc_correction_scale 0.0 = compute but do not apply).
+
+megatron:
+  - name: terminal-rsi-27b-actor
+    role: actor
+    overrides:
+      lr: 5.0e-7
+      min_lr: 5.0e-7
+
+  - name: terminal-rsi-27b-critic
+    role: critic
+    overrides:
+      lr: 1.5e-5
+      min_lr: 1.5e-5
+      value_clip: 4.0
+      clip_grad: 100.0
+
+score_centering:
+  enable_score_centering: true
+  sc_top_k: 32
+  sc_formula: score
+  sc_tail_eps: 1.0e-08
+  sc_weight_denominator: old_actor
+  sc_assert_alignment: full
+  sc_chunk_size: 256
+  sc_wire_format: json
+  sc_correction_scale: 0.0
+  sc_max_response_bytes: 268435456
+  sc_max_trial_bytes: 536870912
+  sc_max_batch_bytes: 8589934592

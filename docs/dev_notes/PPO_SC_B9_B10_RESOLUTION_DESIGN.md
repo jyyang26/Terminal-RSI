@@ -109,7 +109,7 @@ SC 只需要 (b)。而 (a) 牵连 `sampler.py` / `schedule_batch.py` / `sampling
 **目录布局**
 
 ```
-${SLIME_ENV_ROOT}/sglang_sc/                 # 影子根，一次性构建，所有节点共享（apdcephfs）
+${SLIME_ENV_ROOT}/sglang_sc/                 # 影子根，一次性构建，所有节点共享（共享文件系统）
   └── sglang/                                # 完整副本（75 MB）+ 已打最小 patch
 ${SLIME_ENV_ROOT}/sglang_sc/.provenance      # 记录源 HEAD + 本地修改 hash + patch hash
 ```

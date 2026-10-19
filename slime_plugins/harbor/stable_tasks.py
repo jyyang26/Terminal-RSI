@@ -16,7 +16,8 @@ DEFAULT_SIF_IMAGE_MAP = {
     "ghcr.io/laude-institute/t-bench/ubuntu-24-04:latest": "ubuntu-24-04_latest.sif",
 }
 
-DEFAULT_APT_PROXY = "http://star-proxy.oa.com:3128"
+# Egress proxy for apt/pip inside task containers; empty means direct access.
+DEFAULT_APT_PROXY = os.environ.get("APT_PROXY", os.environ.get("HTTPS_PROXY", ""))
 
 
 @dataclass
@@ -322,18 +323,20 @@ def _parse_env(args: str) -> dict[str, str]:
 
 
 def _setup_script(plan: DockerfilePlan, *, apt_proxy: str) -> str:
-    lines = [
-        "#!/usr/bin/env bash",
-        "set -u",
-        f"export http_proxy={shlex.quote(apt_proxy)}",
-        f"export https_proxy={shlex.quote(apt_proxy)}",
-        f"export HTTP_PROXY={shlex.quote(apt_proxy)}",
-        f"export HTTPS_PROXY={shlex.quote(apt_proxy)}",
-        'export no_proxy="${no_proxy:-localhost,127.0.0.1,mirror.ccs.tencentyun.com}"',
-        "if command -v apt-get >/dev/null 2>&1; then",
-        "  mkdir -p /etc/apt/apt.conf.d",
-        f"  printf '%s\\n' 'Acquire::http::Proxy \"{apt_proxy}\";' 'Acquire::https::Proxy \"{apt_proxy}\";' > /etc/apt/apt.conf.d/99slime-harbor-proxy || true",
-        "fi",
+    lines = ["#!/usr/bin/env bash", "set -u"]
+    if apt_proxy:
+        lines += [
+            f"export http_proxy={shlex.quote(apt_proxy)}",
+            f"export https_proxy={shlex.quote(apt_proxy)}",
+            f"export HTTP_PROXY={shlex.quote(apt_proxy)}",
+            f"export HTTPS_PROXY={shlex.quote(apt_proxy)}",
+            'export no_proxy="${no_proxy:-localhost,127.0.0.1}"',
+            "if command -v apt-get >/dev/null 2>&1; then",
+            "  mkdir -p /etc/apt/apt.conf.d",
+            f"  printf '%s\\n' 'Acquire::http::Proxy \"{apt_proxy}\";' 'Acquire::https::Proxy \"{apt_proxy}\";' > /etc/apt/apt.conf.d/99slime-harbor-proxy || true",
+            "fi",
+        ]
+    lines += [
         "run_step() {",
         "  local label=\"$1\"",
         "  local cmd=\"$2\"",

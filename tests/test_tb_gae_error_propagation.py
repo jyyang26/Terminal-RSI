@@ -24,7 +24,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def args_for(enabled):
     config = yaml.safe_load(
         (
-            ROOT / "examples/harbor_terminal_rl/harbor_mixed3000_128gpu_27b_dense_daytona_ppo_cp4_256k_fresh_base.yaml"
+            ROOT / "examples/terminal_rsi/configs/harbor_rpr1_fdr.yaml"
         ).read_text()
     )
     args = SimpleNamespace(

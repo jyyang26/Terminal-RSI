@@ -18,6 +18,7 @@
 set -euo pipefail
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
 
+MODEL=qwen3.8-27b
 PHASE=rpr1
 HARBOR_CONFIG="${RSI_DIR}/configs/harbor_rpr1_fdr.yaml"
 MEGATRON_ROLE_CONFIG="${RSI_DIR}/configs/megatron_roles_rpr1.yaml"

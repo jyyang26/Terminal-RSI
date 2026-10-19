@@ -1,0 +1,20 @@
+# Terminal-RSI | Qwen3.5-122B-A10B per-role Megatron overrides (--megatron-config-path).
+#
+#   actor : lr 1e-6 (2x the canonical 5e-7), constant
+#   critic: lr 1.5e-5 (30x the canonical 5e-7), constant
+#
+# The per-role actor block is authoritative over the top-level --lr (5e-7 on the CLI).
+# Clip settings are inherited from the CLI (clip_grad 1.0, value_clip default).
+
+megatron:
+  - name: terminal-rsi-122b-actor
+    role: actor
+    overrides:
+      lr: 1.0e-6
+      min_lr: 1.0e-6
+
+  - name: terminal-rsi-122b-critic
+    role: critic
+    overrides:
+      lr: 1.5e-5
+      min_lr: 1.5e-5

@@ -1,0 +1,80 @@
+# Terminal-RSI | Qwen3.5-122B-A10B Terminal RL -- Harbor config
+#
+# PPO actor-critic on Harbor/Terminus-2 terminal tasks with the CTRF progress reward
+#   R = C * P / D + (1 - C) * S      (slime_plugins.harbor.partial_reward.test_count_progress_rewards)
+# Global divisor D = 20 (code default). To change it, add harbor_testcount_scale here (and
+# optionally a harbor_family_testcount_scales table for per-family divisors, as in RPR-1).
+#
+# 84k context on both sides (agent max_context_tokens == SGLang / Megatron 86016), batch
+# 512 trajectories, Daytona sandboxes, rollout_shuffle per epoch.
+#
+# Placeholders (__TASKS_DIR__, __EVAL_TASKS_DIR__, __TRIALS_DIR__) are substituted by
+# examples/terminal_rsi/common.sh when the run is launched.
+
+rollout_shuffle: true
+harbor_tasks_dir: __TASKS_DIR__
+harbor_tasks_glob: "*/task.toml"
+# Skip the first 11900 tasks of sorted(glob): trains on the held-out ("unseen") tail of
+# the 15k strategy pool. Set to 0 to start from the beginning of TASKS_DIR.
+harbor_tasks_offset: 11900
+harbor_eval_tasks_dir: __EVAL_TASKS_DIR__
+harbor_eval_tasks_glob: "*/task.toml"
+harbor_trial_defaults:
+  trials_dir: __TRIALS_DIR__
+  timeout_multiplier: 1.0
+  agent:
+    import_path: slime_plugins.harbor.agent:SlimeTerminus2
+    model_name: slime-policy
+    override_timeout_sec: 3600
+    kwargs:
+      parser_name: json
+      max_turns: 60
+      collect_rollout_details: true
+      enable_summarize: true
+      # 84k agent window: compact at 64k, keep 20k headroom for the summarization pass.
+      proactive_summarization_threshold: 65536
+      trajectory_config:
+        raw_content: true
+        linear_history: true
+      record_terminal_session: false
+      llm_backend: slime_sglang
+      llm_kwargs:
+        apply_chat_template_kwargs:
+          enable_thinking: false
+        max_context_tokens: 86016
+  verifier:
+    override_timeout_sec: 900
+  environment:
+    type: daytona
+    delete: true
+    override_storage_mb: 10240
+    kwargs:
+      connection_pool_maxsize: 128
+      auto_stop_interval_mins: 90
+      auto_delete_interval_mins: 10
+harbor_sample_mode: trajectory_retokenized
+harbor_group_unit: trajectory
+harbor_reward_key: reward
+# 560 concurrent trials for batch 512 (1.09x oversampling), 70 per rollout node.
+harbor_num_concurrent_trials: 560
+harbor_fully_async_max_concurrent_groups: 560
+harbor_partial_group_min_units: 1
+harbor_create_rate_per_sec: 6.0
+harbor_create_rate_burst: 6.0
+harbor_trial_node_spread: true
+harbor_trials_per_node: 70
+harbor_trial_worker_num_cpus: 0.05
+harbor_trial_worker_startup_timeout_sec: 120
+harbor_trial_worker_healthcheck_timeout_sec: 30
+harbor_kill_unhealthy_trial_workers: false
+harbor_fallback_to_inprocess_trials: false
+harbor_trial_remote_timeout_sec: 5400
+harbor_eval_total_timeout_sec: 10800
+rollout_cleanup_function_path: slime_plugins.harbor.fully_async_rollout.cleanup_rollout
+harbor_fully_async_shutdown_drain_timeout_sec: 30
+harbor_fully_async_shutdown_join_timeout_sec: 45
+harbor_fail_on_conversion_error: true
+harbor_fail_on_trial_error: false
+harbor_require_full_rollout_groups: false
+harbor_rollout_group_attempt_multiplier: 12
+harbor_retry_missing_samples: 0

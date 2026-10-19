@@ -224,7 +224,7 @@ The real exception is in the ray JOB-DRIVER log (not the actor stdout, not the l
 Call stack:
 
 ```
-MegatronTrainRayActor.train()  (pid=2290599, ip=10.0.0.3)
+MegatronTrainRayActor.train()  (pid=2290599, ip=<node-ip>)
   actor.py:409  train  ->  actor.py:504  train_actor
   actor.py:387  compute_log_prob  ->  model.py:382  forward_only
   model.py:345  output_tensor = model(**forward_kwargs)        # forward_kwargs carries packed_seq_params (qkv_format=thd)

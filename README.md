@@ -128,13 +128,14 @@ Terminal-RSI/
 ├── train.py                       # synchronous / eval-only entry point
 ├── examples/
 │   ├── terminal_rsi/              # ★ Terminal-RSI recipes (start here)
-│   │   ├── run_rpr1_fdr.sh        #   RPR-1: Family Dense Reward, actor lr 5e-7
-│   │   ├── run_rpr2_spr.sh        #   RPR-2: Success-Prioritized Reward, actor lr 1e-7
+│   │   ├── run_rpr1_fdr.sh        #   RPR-1 (Qwen3.8-27B): Family Dense Reward, actor lr 5e-7
+│   │   ├── run_rpr2_spr.sh        #   RPR-2 (Qwen3.8-27B): Success-Prioritized Reward, actor lr 1e-7
+│   │   ├── run_122b_terminal.sh   #   Qwen3.5-122B-A10B Terminal RL (MoE, 84k context)
 │   │   ├── run_eval.sh            #   rollout-only evaluation on a Harbor task pool
 │   │   ├── prepare_load_root.sh   #   actor / critic load-root pair for warm handoff
 │   │   ├── common.sh              #   shared argument builder + Ray job submission
-│   │   └── configs/               #   Harbor configs (FDR / SPR divisor tables), per-role optimizer configs
-│   └── harbor_terminal_rl/        # development recipes, ablations and operational notes
+│   │   └── configs/               #   Harbor configs (FDR / SPR divisor tables, 122B), per-role optimizer configs
+│   └── harbor_terminal_rl/        # Harbor runtime deps + HF -> torch_dist conversion (27B, 122B)
 ├── slime_plugins/
 │   ├── harbor/                    # ★ Terminal-agent RL plugin
 │   │   ├── rollout.py             #   Harbor/Terminus-2 agentic rollout (generate_rollout)
@@ -243,7 +244,20 @@ LOAD_ROOT=/ckpt/loadroot_rpr2 bash examples/terminal_rsi/run_rpr2_spr.sh
 
 The **Warm-up Critic** uses the same launcher with a cold value head: build an actor-only root (`prepare_load_root.sh <actor> none <root>`) and run with `WARM_CRITIC=0 NUM_CRITIC_ONLY_STEPS=<N> NUM_ROLLOUT=<N>`, where `N` covers one epoch of the task pool. **TB-GAE** is switched on by appending `EXTRA_ARGS="--enable-tb-gae --tb-gae-gamma-turn <γ> --tb-gae-lambda-turn <λ>"`. The **RSR** stages are supervised fine-tuning on verified rewritten trajectories (see slime's SFT recipes, e.g. `scripts/run-qwen3-4B-base-sft.sh`); the RSR data pipeline itself follows the RSR paper and is not part of this release.
 
-See [`examples/terminal_rsi/README.md`](examples/terminal_rsi/README.md) for all options.
+**Qwen3.5-122B-A10B Terminal RL.** The same stack also trains the 256-expert MoE model at
+84k context on 64 + 64 GPUs (TP2 × PP4 × CP4, EP16; 8 SGLang engines × 8 GPUs), batch 512,
+with the CTRF progress reward and rollout routing replay:
+
+```bash
+HF_CKPT=/path/to/Qwen3.5-122B-A10B SAVE_DIR=/path/to/Qwen3.5-122B-A10B_torch_dist \
+    bash examples/harbor_terminal_rl/convert_qwen35_122b_a10b_torch_dist.sh
+bash examples/terminal_rsi/prepare_load_root.sh \
+     /path/to/Qwen3.5-122B-A10B_torch_dist/iter_XXXXXXX none /ckpt/loadroot_122b
+WARM_CRITIC=0 HF_CKPT=/path/to/Qwen3.5-122B-A10B LOAD_ROOT=/ckpt/loadroot_122b \
+TASKS_DIR=/path/to/strategy15k/tasks bash examples/terminal_rsi/run_122b_terminal.sh
+```
+
+See [`examples/terminal_rsi/README.md`](examples/terminal_rsi/README.md) for all options (resume, dry run, TB-GAE, ...).
 
 ### 3. Evaluation
 
@@ -293,4 +307,4 @@ Terminal-RSI builds on [slime](https://github.com/THUDM/slime), [Megatron-LM](ht
 
 ## 📬 Contact
 
-Junyao Yang: [junyaoyang@u.nus.edu](mailto:junyaoyang@u.nus.edu) · [tberiusyang@global.tencent.com](mailto:tberiusyang@global.tencent.com)
+Junyao Yang: [junyaoyang@u.nus.edu](mailto:junyaoyang@u.nus.edu)
