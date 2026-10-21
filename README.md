@@ -43,60 +43,6 @@ Starting from Qwen3.8-27B, the sequence **Base → RSR-1 → RPR-1 → RSR-2 →
 <p><b>Figure 1. Retained-stage gains coexist with nonmonotonic exploration.</b> Positions denote Base, RSR-1, RPR-1 (step 20), RSR-2 and RPR-2 (step 18, Terminal-RSI-27B). These are stage positions, not equal compute intervals. Blue diamonds mark RSR, stars the retained RPR checkpoints, and gray branches unretained controls or continuations. LHTB shows completed tasks (left axis) and process reward (right axis).</p>
 </div>
 
-## 🧠 Method
-
-### Overall framework
-
-<div align="center">
-<img src="assets/figure2_terminal_rsi_overview.png" alt="Figure 2" width="90%"/>
-<p><b>Figure 2. Recursive policy improvement preserves value knowledge across supervised transitions.</b> Actor-only RSR alternates with joint actor–critic RPR; the bypass carries critic weights through RSR, and the feedback arrow returns the retained policy to the next cycle.</p>
-</div>
-
-If $(\theta_k^+,\phi_k^+)$ are the actor and critic retained after RPR phase $k$, the next cycle is
-
-$$
-(\theta_{k+1}^{0},\phi_{k+1}^{0})=\big(\mathrm{RSR}(\theta_k^+,Q_k^{\rm clean}),\ \phi_k^+\big),\qquad
-\phi_{k+1}^{\rm warm}=\mathrm{Warmup}_4\big(\phi_{k+1}^{0};\ \theta_{k+1}^{0}\ \text{fixed}\big),
-$$
-
-i.e. the critic is untouched by RSR ($\Delta\phi|_{\rm RSR}=0$) and recalibrated with four critic-only updates before joint PPO training resumes. Before the first RPR phase, one critic-only epoch on the SWR task pool prepares the **Warm-up Critic** $\phi_{\rm seed}$ while the actor stays frozen.
-
-### A single recursive step
-
-<div align="center">
-<img src="assets/figure3_rsr_rpr_single_step.png" alt="Figure 3" width="90%"/>
-<p><b>Figure 3. Supervised rewriting and policy refinement require different parameter updates.</b> The left branch (RSR, actor only) discovers, rewrites and verifies demonstrations. The right branch (RPR, actor–critic) connects the prior critic, the per-phase critic warm-up, reward calibration and turn-boundary credit assignment.</p>
-</div>
-
-**RSR (adopted).** Following RSR, successful trajectories discovered under complementary harnesses are converted into runbooks, gated for schema validity and leakage, re-executed under the target harness, and kept only if the protected verifier passes. The accepted public trajectories $Q_k^{\rm clean}$ supervise the actor with masked negative log-likelihood, while the critic stays fixed.
-
-**RPR (proposed).** RPR updates actor and critic jointly with PPO (asymmetric clip $\epsilon_\ell=0.3,\ \epsilon_h=5$, value clip 4, no KL or entropy terms). Its two distinctive components are:
-
-<table>
-<tr><th>Rewards (Sec. 2.2)</th><th>TB-GAE (Sec. 2.3)</th></tr>
-<tr><td>
-
-$$R_{\rm FDR}=C\,\frac{P}{D_f}+(1-C)\,S$$
-
-$$R_{\rm SPR}=S+C\,\frac{P}{P+D'_f}$$
-
-$P$ = passed semantic checks, $S$ = strict success, $C$ = valid CTRF report, $D_f$ = family divisor (historical p90, fallback 82). Under SPR every failure scores $<1$ and every success $\ge 1$.
-
-</td><td>
-
-$$(\Gamma_j,\Lambda_j) = (1,1), \quad \text{if } t(j+1)=t(j)$$
-
-$$(\Gamma_j,\Lambda_j) = (\gamma_{\mathrm{turn}},\lambda_{\mathrm{turn}}), \quad \text{otherwise}$$
-
-$$\delta_j=\tilde r_j+\Gamma_j(1-d_j)v_{j+1}-v_j$$
-
-$$A_j=\delta_j+\Gamma_j\Lambda_j(1-d_j)A_{j+1}$$
-
-$K$ turn boundaries give attenuation $(\gamma_{\rm turn}\lambda_{\rm turn})^K$, independent of observation length.
-
-</td></tr>
-</table>
-
 ## 📊 Results
 
 Success rates (%) of the same checkpoint across all four suites at each retained stage; arrows are gains over the preceding retained stage.
