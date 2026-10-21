@@ -1,12 +1,10 @@
 <div align="center">
 
-<img src="assets/logo.jpeg" alt="Terminal-RSI" width="180"/>
-
 # Terminal-RSI
 
 ### Recursive Self-Improving Terminal Agents via Recursive Self-Rewrite and Policy-Refine
 
-[![Paper](https://img.shields.io/badge/Paper-Preprint%20(coming%20soon)-b31b1b.svg)](#citation)
+[![Paper](https://img.shields.io/badge/Paper-arXiv%3A2610.22192-b31b1b.svg)](https://arxiv.org/abs/2610.22192v1)
 [![Project Page](https://img.shields.io/badge/Project-Page-0052D9.svg)](https://jyyang26.github.io/terminal-rsi)
 [![Model Weights](https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-Model%20Weights-ffc107.svg)](https://huggingface.co/Teriminal-RSI)
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-3776AB.svg?logo=python&logoColor=white)](https://www.python.org/)
@@ -155,7 +153,7 @@ Terminal-RSI/
 ├── tests/                         # CPU unit tests (rewards, TB-GAE math, Harbor adapters) + GPU E2E tests
 ├── docker/  build_conda.sh        # environment
 ├── docs/                          # slime documentation and development notes
-└── assets/                        # logo and paper figures
+└── assets/                        # paper figures
 ```
 
 ## ⚙️ Installation
@@ -286,14 +284,30 @@ python -m sglang.launch_server --model-path /ckpt/terminal_rsi_27b_hf \
 
 ## 📝 Citation
 
-If you find Terminal-RSI useful, please cite:
+If you find Terminal-RSI useful, please cite [our paper](https://arxiv.org/abs/2610.22192v1):
 
 ```bibtex
-@article{yang2026terminalrsi,
-  title   = {Terminal-RSI: Recursive Self-Improving Terminal Agents via Recursive Self-Rewrite and Policy-Refine},
-  author  = {Yang, Junyao and Li, Zongxia and Shi, Yucheng and Li, Zhongzhi and Wang, Ruhan and Zhou, Ruiwen and Mi, Haitao and Yan, Shuicheng and Liang, Leowei},
-  journal = {arXiv preprint},
-  year    = {2026}
+@misc{yang2026terminalrsi,
+  title         = {Terminal-RSI: Recursive Self-Improving Terminal Agents via Recursive Self-Rewrite and Policy-Refine},
+  author        = {Yang, Junyao and Li, Zongxia and Shi, Yucheng and Li, Zhongzhi and Wang, Ruhan and Zhou, Ruiwen and Mi, Haitao and Yan, Shuicheng and Liang, Leowei},
+  year          = {2026},
+  eprint        = {2610.22192},
+  archivePrefix = {arXiv},
+  url           = {https://arxiv.org/abs/2610.22192v1}
+}
+```
+
+Terminal-RSI and [T1](https://arxiv.org/abs/2609.11042) share the same terminal-agent reinforcement-learning training framework. If you use this training framework, please also cite T1:
+
+```bibtex
+@misc{yang2026t1terminalagentreinforcement,
+  title         = {T1: Terminal Agent Reinforcement Learning for Long-Horizon Tasks},
+  author        = {Junyao Yang and Yucheng Shi and Zhongzhi Li and Ruhan Wang and Zongxia Li and Haitao Mi and Leowei Liang},
+  year          = {2026},
+  eprint        = {2609.11042},
+  archivePrefix = {arXiv},
+  primaryClass  = {cs.LG},
+  url           = {https://arxiv.org/abs/2609.11042}
 }
 ```
 
