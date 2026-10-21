@@ -19,6 +19,7 @@
 ## 📰 News
 
 - **[2026-10]** Code release: RPR training recipes (FDR / SPR rewards, warm-critic handoff, TB-GAE) for Qwen3.8-27B.
+- **[2026-10]** Code release: T1 training recipes for Qwen3.5-122B-A10B.
 
 ## 📖 Overview
 
