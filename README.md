@@ -84,7 +84,9 @@ $P$ = passed semantic checks, $S$ = strict success, $C$ = valid CTRF report, $D_
 
 </td><td>
 
-$$(\Gamma_j,\Lambda_j)=\begin{cases}(1,1) & t(j{+}1)=t(j)\\(\gamma_{\rm turn},\lambda_{\rm turn}) & \text{otherwise}\end{cases}$$
+$$(\Gamma_j,\Lambda_j) = (1,1), \quad \text{if } t(j+1)=t(j)$$
+
+$$(\Gamma_j,\Lambda_j) = (\gamma_{\mathrm{turn}},\lambda_{\mathrm{turn}}), \quad \text{otherwise}$$
 
 $$\delta_j=\tilde r_j+\Gamma_j(1-d_j)v_{j+1}-v_j$$
 
