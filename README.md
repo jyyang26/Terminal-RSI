@@ -138,8 +138,12 @@ python -m pytest tests/test_terminal_rsi_rewards.py tests/test_tb_gae_math.py te
 
 ### 1. Prepare checkpoints and data
 
+For HF-to-Megatron conversion, set `NPROC_PER_NODE`, `TENSOR_MODEL_PARALLEL_SIZE`,
+`PIPELINE_MODEL_PARALLEL_SIZE`, and `MODEL_SCRIPT` for your environment as described
+in [`examples/harbor_terminal_rl/README.md`](examples/harbor_terminal_rl/README.md).
+
 ```bash
-# HF -> Megatron torch_dist (TP1 x PP8 on one 8-GPU node; torch_dist reloads at any TP/PP/CP layout)
+# HF -> Megatron torch_dist (configure conversion resources for your environment)
 HF_CKPT=/path/to/Qwen3.8-27B SAVE_DIR=/path/to/Qwen3.8-27B_torch_dist \
     bash examples/harbor_terminal_rl/convert_q38_27b_base_torch_dist.sh
 
@@ -154,7 +158,7 @@ FDR/SPR read the task family from `tests/private/manifest.json` (`family_id`) an
 
 ### 2. RL training (RPR)
 
-All launchers assume a running Ray cluster with **64 training GPUs** (TP4 × CP4 × PP2, DP2) and **56 rollout GPUs** (14 SGLang engines × TP4), a 256k context window, and a batch of 256 trajectories per step. Use `DRY_RUN=1` to print the exact command without launching.
+The training launchers require a running Ray cluster and an explicit resource configuration for your environment. Set `ACTOR_NUM_NODES`, `ACTOR_NUM_GPUS_PER_NODE`, `ROLLOUT_NUM_GPUS`, `ROLLOUT_NUM_GPUS_PER_ENGINE`, `TENSOR_MODEL_PARALLEL_SIZE`, `PIPELINE_MODEL_PARALLEL_SIZE`, and `CONTEXT_PARALLEL_SIZE` before launching; no experiment-specific resource defaults are provided. RPR uses a 256k context window and a batch of 256 trajectories per step. See [`examples/terminal_rsi/README.md`](examples/terminal_rsi/README.md) for resource requirements. Use `DRY_RUN=1` to inspect the generated command without launching training.
 
 ```bash
 # RPR-1: RSR-1 actor + Warm-up Critic, Family Dense Reward
@@ -182,8 +186,9 @@ LOAD_ROOT=/ckpt/loadroot_rpr2 bash examples/terminal_rsi/run_rpr2_spr.sh
 The **Warm-up Critic** uses the same launcher with a cold value head: build an actor-only root (`prepare_load_root.sh <actor> none <root>`) and run with `WARM_CRITIC=0 NUM_CRITIC_ONLY_STEPS=<N> NUM_ROLLOUT=<N>`, where `N` covers one epoch of the task pool. **TB-GAE** is enabled by default for RPR-1 in `configs/harbor_rpr1_fdr.yaml`, with `tb_gae_gamma_turn: 1.0` and `tb_gae_lambda_turn: 1.0`. Override the turn discounts with `EXTRA_ARGS="--tb-gae-gamma-turn <γ> --tb-gae-lambda-turn <λ>"`, or explicitly disable it with `EXTRA_ARGS="--no-enable-tb-gae"`. The **RSR** stages are supervised fine-tuning on verified rewritten trajectories (see slime's SFT recipes, e.g. `scripts/run-qwen3-4B-base-sft.sh`); the RSR data pipeline itself follows the RSR paper and is not part of this release.
 
 **Qwen3.5-122B-A10B Terminal RL.** The same stack also trains the 256-expert MoE model at
-84k context on 64 + 64 GPUs (TP2 × PP4 × CP4, EP16; 8 SGLang engines × 8 GPUs), batch 512,
-with the CTRF progress reward and rollout routing replay:
+84k context with batch 512, the CTRF progress reward, and rollout routing replay.
+Configure the training and rollout resources for your environment, including
+`EXPERT_MODEL_PARALLEL_SIZE` and `EXPERT_TENSOR_PARALLEL_SIZE` for MoE training:
 
 ```bash
 HF_CKPT=/path/to/Qwen3.5-122B-A10B SAVE_DIR=/path/to/Qwen3.5-122B-A10B_torch_dist \
@@ -218,7 +223,7 @@ The converted checkpoint is a standard HuggingFace model and can be served with 
 
 ```bash
 python -m sglang.launch_server --model-path /ckpt/terminal_rsi_27b_hf \
-    --tp 4 --context-length 262144 --mamba-scheduler-strategy extra_buffer --port 30000
+    --tp "${ROLLOUT_NUM_GPUS_PER_ENGINE}" --context-length 262144 --mamba-scheduler-strategy extra_buffer --port 30000
 ```
 
 ## 📝 Citation

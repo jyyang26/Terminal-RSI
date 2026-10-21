@@ -10,17 +10,11 @@
 # config.json, with NO latest_checkpointed_iteration.txt and no *.distcp. Megatron's
 # --load goes through the torch_dist reader (checkpointing.py:_is_megatron_checkpoint),
 # so pointing --load straight at the HF dir cannot work -- and the runtime HF "bridge"
-# load path is documented (convert_qwen35_122b_a10b_torch_dist.sh) to fail for this
-# model family at PP>1, while this run is PP=2. Conversion is therefore mandatory,
-# exactly as it was for run #2's actor (which converted the SFT iter263 the same way).
-#
-# A torch_dist checkpoint reloads at ANY TP/PP/CP layout, so converting at TP1xPP8
-# here is fine for TP4xCP4xPP2 training.
-#
-# =========================== TP=1 / PP=8 IS DELIBERATE ==========================
-# TP conversion can stall in mbridge's tensor-parallel scatter for the Qwen3.5
-# GatedDeltaNet blocks, so the upstream 27B examples convert PP-only on a single
-# 8-GPU node. Kept identical here.
+# load path can fail for pipeline-parallel loading of this model family.
+# Conversion resources and parallelism are provided by the caller.
+# A torch_dist checkpoint can be resharded into a compatible training layout.
+# Tensor-parallel conversion can stall in mbridge's scatter for GatedDeltaNet;
+# validate the chosen conversion layout against the model and backend.
 #
 # ======================== THE BASE IS A VLM CHECKPOINT ========================
 # config.json says architectures=[Qwen3_5ForConditionalGeneration], model_type=qwen3_5,
@@ -38,28 +32,19 @@
 #   * The mapping runs mcore -> hf, i.e. it PULLS the keys Megatron asks for. Extra HF
 #     keys (visual, mtp) are simply never requested. scripts/models/qwen3.5-27B.sh
 #     declares 64 dense layers and no MTP, so nothing asks for them.
-# Expected output shape, matching the already-converted run #2 actor:
-#   956 entries = 946 decoder + embedding.word_embeddings.weight + output_layer.weight
-#   + 8 rng_state shards;  0 visual, 0 mtp, 0 optimizer entries.
+# Output includes decoder, embedding and output-layer weights, with no visual,
+# MTP or optimizer entries. RNG sharding depends on the configured resources.
 #
 # ===================== THE OUTPUT TRACKER SAYS "release" =====================
-# convert_hf_to_torch_dist.py writes iteration "release" (a release/ subdir plus
-# latest_checkpointed_iteration.txt containing "release"). That is exactly what a
-# FRESH run needs: arguments.py:1814-1815 special-cases the literal "release" and sets
-# start_rollout_id = 0. A numeric tracker would instead leave start_rollout_id at
-# loaded_iteration+1 -- the bug documented at run_27b_dense_128gpu_ppo_256k.sh:105-128
-# where range(176, 2) was empty and nothing ever trained.
-# So NO symlink load-root is needed here (unlike the iter263 / iter19 cases): --load
-# points at this output directory directly.
+# convert_hf_to_torch_dist.py writes iteration "release". A fresh training run
+# uses this tracker to start at rollout 0; a numeric tracker instead resumes at
+# loaded_iteration + 1. The output directory can be used directly as --load.
 #
 # ======================== NO _critic SIBLING MAY EXIST ========================
-# The new run wants a COLD critic (random value head, then 2 critic-only warmup
-# steps). placement_group.py:195 redirects the critic's --load to "<load>_critic" if
-# that sibling exists, which would silently WARM-load a value head instead. The
-# wrapper hard-fails on this (run_27b_dense_128gpu_ppo_256k.sh:473-475), and this
-# script asserts it too.
+# A cold critic requires the absence of "<load>_critic"; otherwise the critic
+# would silently load the existing value head. This script checks the sibling.
 #
-# Requires 8 idle GPUs -> run ONLY after the previous training job is fully stopped.
+# Allocate conversion resources separately from active training jobs.
 #
 # Usage:
 #   bash examples/harbor_terminal_rl/convert_q38_27b_base_torch_dist.sh
@@ -70,14 +55,18 @@ USER_ROOT=${USER_ROOT:-/path/to/workspace}
 SLIME_DIR=${SLIME_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}
 HF_CKPT=${HF_CKPT:-/path/to/models/Qwen3.8-27B}
 SAVE_DIR=${SAVE_DIR:-${USER_ROOT}/checkpoints/q38_27b_base_torch_dist}
-MODEL_SCRIPT=${MODEL_SCRIPT:-${SLIME_DIR}/scripts/models/qwen3.5-27B.sh}
-NPROC_PER_NODE=${NPROC_PER_NODE:-8}
 MASTER_PORT=${MASTER_PORT:-12377}
 LOG_FILE=${LOG_FILE:-${SAVE_DIR%/}.convert.log}
-
-TENSOR_MODEL_PARALLEL_SIZE=${TENSOR_MODEL_PARALLEL_SIZE:-1}
-PIPELINE_MODEL_PARALLEL_SIZE=${PIPELINE_MODEL_PARALLEL_SIZE:-8}
 DISTRIBUTED_TIMEOUT_MINUTES=${DISTRIBUTED_TIMEOUT_MINUTES:-60}
+
+for name in MODEL_SCRIPT NPROC_PER_NODE TENSOR_MODEL_PARALLEL_SIZE PIPELINE_MODEL_PARALLEL_SIZE; do
+  [ -n "${!name:-}" ] || { echo "[convert] ERROR: set ${name} for your environment" >&2; exit 1; }
+done
+for name in NPROC_PER_NODE TENSOR_MODEL_PARALLEL_SIZE PIPELINE_MODEL_PARALLEL_SIZE; do
+  [[ "${!name}" =~ ^[1-9][0-9]{0,5}$ ]] || { echo "[convert] ERROR: ${name} must be a positive integer" >&2; exit 1; }
+done
+(( NPROC_PER_NODE == TENSOR_MODEL_PARALLEL_SIZE * PIPELINE_MODEL_PARALLEL_SIZE )) \
+  || { echo "[convert] ERROR: conversion process count must match the parallel layout" >&2; exit 1; }
 
 test -d "${SLIME_DIR}"
 test -d "${HF_CKPT}"
@@ -110,7 +99,6 @@ export CUDA_DEVICE_MAX_CONNECTIONS=${CUDA_DEVICE_MAX_CONNECTIONS:-1}
 
 echo "[convert] hf     = ${HF_CKPT}"
 echo "[convert] save   = ${SAVE_DIR}"
-echo "[convert] layout = TP${TENSOR_MODEL_PARALLEL_SIZE} x PP${PIPELINE_MODEL_PARALLEL_SIZE} on ${NPROC_PER_NODE} GPU"
 echo "[convert] log    = ${LOG_FILE}"
 
 torchrun \

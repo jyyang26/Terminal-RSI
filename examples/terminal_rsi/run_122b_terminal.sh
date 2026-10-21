@@ -2,7 +2,6 @@
 # Terminal-RSI | Qwen3.5-122B-A10B Terminal RL (PPO actor-critic, CTRF progress reward).
 #
 #   model  : Qwen3.5-122B-A10B MoE, 84k context
-#   layout : 64 train GPUs (TP2 x PP4 x CP4, EP16) + 64 rollout GPUs (8 SGLang engines x 8)
 #   reward : R = C * P / D + (1 - C) * S
 #            slime_plugins.harbor.partial_reward.test_count_progress_rewards
 #   batch 512 (oversample 560), 100 rollouts, actor lr 1e-6 / critic lr 1.5e-5 (per-role),

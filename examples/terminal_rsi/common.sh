@@ -5,9 +5,9 @@
 # sourced by run_rpr1_fdr.sh / run_rpr2_spr.sh / run_122b_terminal.sh / run_eval.sh,
 # which set the phase-specific variables below and then call `rpr_launch`.
 #
-# Two model profiles (MODEL=...) fix the architecture, parallel layout and context:
-#   qwen3.8-27b       dense GatedDeltaNet hybrid, 256k context, 64 train + 56 rollout GPUs
-#   qwen3.5-122b-a10b 256-expert MoE (A10B),       84k context, 64 train + 64 rollout GPUs
+# Two model profiles (MODEL=...) fix the architecture and context:
+#   qwen3.8-27b       dense GatedDeltaNet hybrid, 256k context
+#   qwen3.5-122b-a10b 256-expert MoE (A10B),       84k context
 #
 # Phase-specific variables (set by the phase script):
 #   MODEL                 qwen3.8-27b (default) | qwen3.5-122b-a10b
@@ -26,9 +26,14 @@
 #   HARBOR_SRC       directory that makes `import harbor` work (Harbor framework src/)
 #   DAYTONA_API_KEY  Daytona sandbox credentials (environment.type: daytona)
 #
+# Required resource variables:
+#   ROLLOUT_NUM_GPUS  ROLLOUT_NUM_GPUS_PER_ENGINE
+#   Training: ACTOR_NUM_NODES  ACTOR_NUM_GPUS_PER_NODE  TENSOR_MODEL_PARALLEL_SIZE
+#             PIPELINE_MODEL_PARALLEL_SIZE  CONTEXT_PARALLEL_SIZE
+#   MoE training: EXPERT_MODEL_PARALLEL_SIZE  EXPERT_TENSOR_PARALLEL_SIZE
+#
 # Optional user variables (defaults in parentheses):
 #   OUTPUT_ROOT (./outputs)  MEGATRON_LM_DIR (/root/Megatron-LM)  RUN_TAG (timestamp)
-#   ACTOR_NUM_NODES (8)  ACTOR_NUM_GPUS_PER_NODE (8)  ROLLOUT_NUM_GPUS (27B: 56, 122B: 64)
 #   NUM_ROLLOUT (27B: 36, 122B: 100)  SAVE_INTERVAL (27B: 2, 122B: 10)
 #   NUM_CRITIC_ONLY_STEPS (27B: 4, 122B: 2)  EPS_CLIP / EPS_CLIP_HIGH (27B: 0.3/5.0, 122B: 0.2/-)
 #   REF_LOAD (= LOAD_ROOT)  START_ROLLOUT_ID (0; set to <last iter>+1 when LOAD_ROOT is a
@@ -59,16 +64,15 @@ rpr_launch() {
   : "${HARBOR_SRC:?set HARBOR_SRC to the Harbor framework src/ dir}"
 
   # ---- model profile -------------------------------------------------------------------
-  local model_tag rollout_gpus batch oversample ctx save_interval num_rollout critic_only
-  local tp pp cp ep lpc engine_gpus mem_frac eps_clip eps_clip_high max_train_tokens
+  local model_tag batch oversample ctx save_interval num_rollout critic_only
+  local tp=1 pp=1 cp=1 ep=1 etp=1 lpc engine_gpus mem_frac eps_clip eps_clip_high max_train_tokens
   local MODEL_ARGS=() CKPT_EXTRA=()
   case "${MODEL:-qwen3.8-27b}" in
     qwen3.8-27b)
       # Qwen3.8-27B dense (64 layers, GQA 24/4, gated attention, GatedDeltaNet hybrid).
-      # TP=4 is the ceiling (num_query_groups=4); CP=4 needs fla.ops.cp.
-      model_tag=27b; rollout_gpus=56; batch=256; oversample=288; ctx=262144
+      model_tag=27b; batch=256; oversample=288; ctx=262144
       save_interval=2; num_rollout=36; critic_only=4; eps_clip=0.3; eps_clip_high=5.0
-      tp=4; pp=2; cp=4; ep=1; lpc=1024; engine_gpus=4; mem_frac=0.75
+      lpc=1024; mem_frac=0.75
       MODEL_ARGS=(
         --spec slime_plugins.models.qwen3_5 get_qwen3_5_spec
         --disable-bias-linear --qk-layernorm --group-query-attention
@@ -83,11 +87,10 @@ rpr_launch() {
       ;;
     qwen3.5-122b-a10b)
       # Qwen3.5-122B-A10B MoE (48 layers, 256 experts, top-8 + shared expert, GQA 32/2).
-      # Train TP2 x PP4 x CP4 (DP2) with EP16; rollout 8 SGLang engines x 8 GPUs.
       # Routing replay feeds the rollout's expert choices to training; weights-only saves.
-      model_tag=122b; rollout_gpus=64; batch=512; oversample=560; ctx=86016
+      model_tag=122b; batch=512; oversample=560; ctx=86016
       save_interval=10; num_rollout=100; critic_only=2; eps_clip=0.2; eps_clip_high=""
-      tp=2; pp=4; cp=4; ep=16; lpc=32; engine_gpus=8; mem_frac=0.6
+      lpc=32; mem_frac=0.6
       MODEL_ARGS=(
         --spec slime_plugins.models.qwen3_5 get_qwen3_5_spec
         --disable-bias-linear --qk-layernorm --group-query-attention
@@ -121,6 +124,36 @@ rpr_launch() {
   local megatron_lm_dir="${MEGATRON_LM_DIR:-/root/Megatron-LM}"
 
   # ---- preflight -------------------------------------------------------------------
+  local resource_keys=(ROLLOUT_NUM_GPUS ROLLOUT_NUM_GPUS_PER_ENGINE)
+  if [ "${eval_only}" != "1" ]; then
+    resource_keys+=(ACTOR_NUM_NODES ACTOR_NUM_GPUS_PER_NODE TENSOR_MODEL_PARALLEL_SIZE
+                   PIPELINE_MODEL_PARALLEL_SIZE CONTEXT_PARALLEL_SIZE)
+    if [ "${model_tag}" = "122b" ]; then
+      resource_keys+=(EXPERT_MODEL_PARALLEL_SIZE EXPERT_TENSOR_PARALLEL_SIZE)
+    fi
+  fi
+  local resource_key
+  for resource_key in "${resource_keys[@]}"; do
+    [[ "${!resource_key:-}" =~ ^[1-9][0-9]{0,5}$ ]] \
+      || _die "set ${resource_key} to a positive integer for your environment"
+  done
+  engine_gpus="${ROLLOUT_NUM_GPUS_PER_ENGINE}"
+  (( ROLLOUT_NUM_GPUS % engine_gpus == 0 )) \
+    || _die "ROLLOUT_NUM_GPUS must divide evenly into rollout engines"
+  local RESOURCE_ARGS=(--rollout-num-gpus "${ROLLOUT_NUM_GPUS}")
+  if [ "${eval_only}" != "1" ]; then
+    tp="${TENSOR_MODEL_PARALLEL_SIZE}"; pp="${PIPELINE_MODEL_PARALLEL_SIZE}"
+    cp="${CONTEXT_PARALLEL_SIZE}"
+    if [ "${model_tag}" = "122b" ]; then
+      ep="${EXPERT_MODEL_PARALLEL_SIZE}"; etp="${EXPERT_TENSOR_PARALLEL_SIZE}"
+    fi
+    local training_world_size=$(( ACTOR_NUM_NODES * ACTOR_NUM_GPUS_PER_NODE ))
+    local model_parallel_size=$(( tp * pp * cp ))
+    (( training_world_size % model_parallel_size == 0 )) \
+      || _die "training resources must be divisible by the tensor/pipeline/context parallel layout"
+    RESOURCE_ARGS+=(--actor-num-nodes "${ACTOR_NUM_NODES}"
+                   --actor-num-gpus-per-node "${ACTOR_NUM_GPUS_PER_NODE}")
+  fi
   for p in "${HF_CKPT}" "${LOAD_ROOT}" "${ref_load}" "${TASKS_DIR}" "${EVAL_TASKS_DIR}" "${HARBOR_SRC}" \
            "${HARBOR_CONFIG}" "${MEGATRON_ROLE_CONFIG}"; do
     [ -e "${p}" ] || _die "missing path: ${p}"
@@ -138,7 +171,7 @@ rpr_launch() {
         || _die "WARM_CRITIC=0 but ${LOAD_ROOT}_critic exists -- the critic would silently warm-load"
     fi
   fi
-  [ "${DRY_RUN:-0}" = "1" ] || [ "${eval_only}" = "1" ] \
+  [ "${DRY_RUN:-0}" = "1" ] || [ "${eval_only}" = "1" ] || [ "${cp}" = "1" ] \
     || python3 -c "import importlib.util,sys; sys.exit(0 if importlib.util.find_spec('fla.ops.cp') else 1)" \
     || _die "fla.ops.cp missing -- pip install 'fla-core>=0.4.2' (needed for CP>1 on GatedDeltaNet)"
   [ "${DRY_RUN:-0}" = "1" ] || [ -n "${DAYTONA_API_KEY:-}" ] || _die "DAYTONA_API_KEY is not set"
@@ -213,13 +246,13 @@ rpr_launch() {
     --num-critic-only-steps "${NUM_CRITIC_ONLY_STEPS:-${critic_only}}"
   )
 
-  # ---- parallelism (profile): 27B TP4 x CP4 x PP2, 122B TP2 x CP4 x PP4 x EP16 --------
+  # ---- user-configured parallelism --------------------------------------------------
   local PERF_ARGS=(
     --tensor-model-parallel-size "${tp}" --pipeline-model-parallel-size "${pp}"
     --context-parallel-size "${cp}"
-    --expert-model-parallel-size "${ep}" --expert-tensor-parallel-size 1
+    --expert-model-parallel-size "${ep}" --expert-tensor-parallel-size "${etp}"
     --recompute-granularity full --recompute-method uniform --recompute-num-layers 1
-    --qkv-format thd --micro-batch-size 1 --sequence-parallel
+    --qkv-format thd --micro-batch-size 1
     --distributed-timeout-minutes 180
     --seq-length "${ctx}" --max-position-embeddings "${ctx}"
     --use-dynamic-batch-size --max-tokens-per-gpu 8192
@@ -228,6 +261,9 @@ rpr_launch() {
     --accumulate-allreduce-grads-in-fp32 --attention-softmax-in-fp32
     --attention-backend flash --moe-token-dispatcher-type alltoall
   )
+  if (( tp > 1 )); then
+    PERF_ARGS+=(--sequence-parallel)
+  fi
 
   local SGLANG_ARGS=(
     --rollout-num-gpus-per-engine "${engine_gpus}"
@@ -273,6 +309,7 @@ rpr_launch() {
     ROLLOUT_ARGS=("${filtered[@]}" --num-rollout 0)
     RPR_ARGS=(--advantage-estimator grpo)
     OPTIMIZER_ARGS=()
+    PERF_ARGS=()
   fi
 
   local EXTRA=()
@@ -281,9 +318,7 @@ rpr_launch() {
 
   local TRAIN_CMD=(
     python3 "${entrypoint}"
-    --actor-num-nodes "${ACTOR_NUM_NODES:-8}"
-    --actor-num-gpus-per-node "${ACTOR_NUM_GPUS_PER_NODE:-8}"
-    --rollout-num-gpus "${ROLLOUT_NUM_GPUS:-${rollout_gpus}}"
+    "${RESOURCE_ARGS[@]}"
     "${MODEL_ARGS[@]}" "${CKPT_ARGS[@]}" "${ROLLOUT_ARGS[@]}" "${EVAL_ARGS[@]}"
     "${OPTIMIZER_ARGS[@]}" "${RPR_ARGS[@]}" "${PERF_ARGS[@]}" "${SGLANG_ARGS[@]}"
     "${LOG_ARGS[@]}" "${EXTRA[@]}"

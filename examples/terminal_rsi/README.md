@@ -3,11 +3,11 @@
 Self-contained launchers for the three Terminal-RSI training setups. Every path and
 credential comes from environment variables; nothing here is tied to a cluster.
 
-| Launcher | Model | Reward | GPUs (train + rollout) | Context |
-| --- | --- | --- | --- | --- |
-| `run_rpr1_fdr.sh` | Qwen3.8-27B (dense) | FDR | 64 + 56 | 256k |
-| `run_rpr2_spr.sh` | Qwen3.8-27B (dense) | SPR | 64 + 56 | 256k |
-| `run_122b_terminal.sh` | Qwen3.5-122B-A10B (MoE) | CTRF progress (`P / 20`) | 64 + 64 | 84k |
+| Launcher | Model | Reward | Context |
+| --- | --- | --- | --- |
+| `run_rpr1_fdr.sh` | Qwen3.8-27B (dense) | FDR | 256k |
+| `run_rpr2_spr.sh` | Qwen3.8-27B (dense) | SPR | 256k |
+| `run_122b_terminal.sh` | Qwen3.5-122B-A10B (MoE) | CTRF progress (`P / 20`) | 84k |
 
 | File | Purpose |
 | --- | --- |
@@ -41,8 +41,23 @@ families, quarters it for long-horizon low-yield families and fills one missing 
 
 ## Running
 
+Configure resources for your environment before launching. No experiment-specific
+resource defaults are supplied:
+
+| Mode | Required resource variables |
+| --- | --- |
+| Training | `ACTOR_NUM_NODES`, `ACTOR_NUM_GPUS_PER_NODE`, `TENSOR_MODEL_PARALLEL_SIZE`, `PIPELINE_MODEL_PARALLEL_SIZE`, `CONTEXT_PARALLEL_SIZE` |
+| Training and evaluation | `ROLLOUT_NUM_GPUS`, `ROLLOUT_NUM_GPUS_PER_ENGINE` |
+| MoE training | Additionally `EXPERT_MODEL_PARALLEL_SIZE`, `EXPERT_TENSOR_PARALLEL_SIZE` |
+
+All values must be positive integers and satisfy the model/backend parallelism and
+cluster-capacity constraints. Training resources must accommodate the chosen
+parallel layout; rollout resources must divide evenly into engines. Rollout-only
+evaluation does not require training resource variables. `DRY_RUN=1` prints your
+configured command and writes the resolved Harbor configuration without starting a job.
+
 ```bash
-# 0. A Ray cluster with 64 training GPUs + 56 rollout GPUs must already be up.
+# 0. Start a Ray cluster and export your resource configuration.
 export HF_CKPT=/path/to/Qwen3.8-27B             # tokenizer + config (and weights for eval)
 export TASKS_DIR=/path/to/swr_tasks              # */task.toml training pool
 export EVAL_TASKS_DIR=/path/to/terminal-bench-2  # */task.toml held-out pool

@@ -122,7 +122,6 @@ harbor_partial_group_min_units: 1
 harbor_create_rate_per_sec: 6.0
 harbor_create_rate_burst: 6.0
 harbor_trial_node_spread: true
-# >>CHANGED 70 -> 35: 280 trials over 8 rollout nodes (reference was 560 over 8).
 harbor_trials_per_node: 35
 harbor_trial_worker_num_cpus: 0.05
 harbor_trial_worker_startup_timeout_sec: 120

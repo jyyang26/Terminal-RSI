@@ -2,29 +2,25 @@
 
 set -euo pipefail
 
-# Offline conversion Qwen3.5-122B-A10B HF -> Megatron torch_dist, on ONE 8-GPU node.
-# Cloned from convert_qwen35_27b_torch_dist.sh. Output goes to the shared gy4 hf_models
-# dir so every training node can read it. This is needed because the RUNTIME bridge
-# path (megatron.bridge in slime/backends/megatron_utils/checkpoint.py) fails for this
-# 122B model at PP>1 (AttributeError on output_layer). The OFFLINE convert here uses
-# slime_plugins.mbridge (Qwen3_5Bridge), which DOES map output_layer.weight->lm_head,
-# producing a torch_dist that the training run can then load with MEGATRON_TO_HF_MODE=raw.
-#
-# TP1 x PP8 single-node convert; the resulting dist checkpoint is re-loadable at any
-# training TP/PP/EP layout (e.g. the training run's TP2 x PP2 x EP16).
+# Offline conversion Qwen3.5-122B-A10B HF -> Megatron torch_dist.
+# The runtime bridge can fail for pipeline-parallel loading of this model.
+# The offline Qwen3_5Bridge maps output_layer.weight to lm_head.
+# Conversion resources and parallelism are provided by the caller.
 
 SLIME_DIR=${SLIME_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}
 HF_CKPT=${HF_CKPT:-/path/to/Qwen3.5-122B-A10B}
 SAVE_DIR=${SAVE_DIR:-${HF_CKPT%/}_torch_dist}
-MODEL_SCRIPT=${MODEL_SCRIPT:-${SLIME_DIR}/scripts/models/qwen3.5-122B-A10B.sh}
-NPROC_PER_NODE=${NPROC_PER_NODE:-8}
 MASTER_PORT=${MASTER_PORT:-12377}
 LOG_FILE=${LOG_FILE:-${SAVE_DIR%/}.convert.log}
 
-# PP-only conversion on one 8-GPU node (48 layers / 8 = 6 per stage). TP conversion can
-# stall in mbridge tensor-parallel scatter for Qwen3.5 GatedDeltaNet, so keep TP1.
-TENSOR_MODEL_PARALLEL_SIZE=${TENSOR_MODEL_PARALLEL_SIZE:-1}
-PIPELINE_MODEL_PARALLEL_SIZE=${PIPELINE_MODEL_PARALLEL_SIZE:-8}
+for name in MODEL_SCRIPT NPROC_PER_NODE TENSOR_MODEL_PARALLEL_SIZE PIPELINE_MODEL_PARALLEL_SIZE; do
+  [ -n "${!name:-}" ] || { echo "[convert] ERROR: set ${name} for your environment" >&2; exit 1; }
+done
+for name in NPROC_PER_NODE TENSOR_MODEL_PARALLEL_SIZE PIPELINE_MODEL_PARALLEL_SIZE; do
+  [[ "${!name}" =~ ^[1-9][0-9]{0,5}$ ]] || { echo "[convert] ERROR: ${name} must be a positive integer" >&2; exit 1; }
+done
+(( NPROC_PER_NODE == TENSOR_MODEL_PARALLEL_SIZE * PIPELINE_MODEL_PARALLEL_SIZE )) \
+  || { echo "[convert] ERROR: conversion process count must match the parallel layout" >&2; exit 1; }
 DECODER_LAST_PIPELINE_NUM_LAYERS=${DECODER_LAST_PIPELINE_NUM_LAYERS:-}
 DISTRIBUTED_TIMEOUT_MINUTES=${DISTRIBUTED_TIMEOUT_MINUTES:-60}
 
