@@ -11,11 +11,6 @@
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.x-EE4C2C.svg?logo=pytorch&logoColor=white)](https://pytorch.org/)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
-**Junyao Yang**<sup>1,2,\*</sup>, **Zongxia Li**<sup>1,5,\*</sup>, **Yucheng Shi**<sup>1,\*</sup>, **Zhongzhi Li**<sup>1,4</sup>, **Ruhan Wang**<sup>1,5</sup>, **Ruiwen Zhou**<sup>2</sup>, **Haitao Mi**<sup>1</sup>, **Shuicheng Yan**<sup>2,†</sup>, **Leowei Liang**<sup>1</sup>
-
-<sup>1</sup>Tencent Hy Foundation Model Frontier &nbsp; <sup>2</sup>National University of Singapore &nbsp; <sup>3</sup>University of Maryland, College Park &nbsp; <sup>4</sup>University of Georgia &nbsp; <sup>5</sup>Indiana University
-
-<sup>\*</sup>Equal contribution &nbsp; <sup>†</sup>Corresponding author
 
 </div>
 
