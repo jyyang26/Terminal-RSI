@@ -26,8 +26,8 @@
 
 ## 📰 News
 
-- **[2026-10]** Code release: Terminal-RSI and RPR training recipes and framework.
-- **[2026-10]** Code release: T1 training recipes and framework.
+- **[2026-10]** Code Release: Training recipes and framework for Terminal-RSI and RPR.
+- **[2026-10]** Code release: Code Release: Training recipes and framework for T1.
 
 ## 📖 Overview
 
