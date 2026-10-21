@@ -45,24 +45,15 @@ Starting from Qwen3.8-27B, the sequence **Base → RSR-1 → RPR-1 → RSR-2 →
 
 ## 📊 Results
 
-Success rates (%) of the same checkpoint across all four suites at each retained stage; arrows are gains over the preceding retained stage.
+Performance of the five retained checkpoints marked in Figure 1, using the checkpoint scores from the accompanying results table. Terminal-Bench and SWR100 scores are success rates (%); LHTB reports average process reward, not a percentage.
 
-| Checkpoint | Terminal-Bench 4.0 | Terminal-Bench 2.1 | Terminal-Bench 3.0 | Terminal-Bench Hard | Macro-avg. |
-| --- | :---: | :---: | :---: | :---: | :---: |
-| Base (Qwen3.8-27B) | 0.00 | 51.70 | 0.00 | 31.00 | 20.68 |
-| Direct PPO (control) | 0.00 | 48.31 | 1.43 | 39.00 | 22.19 |
-| RSR-1 | 6.10 <sub>↑6.10</sub> | 70.10 <sub>↑18.40</sub> | 6.80 <sub>↑6.80</sub> | 54.00 <sub>↑23.00</sub> | 34.25 |
-| RPR-1 (step 20) | 16.67 <sub>↑10.57</sub> | 77.53 <sub>↑7.43</sub> | 14.29 <sub>↑7.49</sub> | 69.50 <sub>↑15.50</sub> | 44.50 |
-| RSR-2 | 17.46 <sub>↑0.79</sub> | **86.52** <sub>↑8.99</sub> | 15.00 <sub>↑0.71</sub> | 76.00 <sub>↑6.50</sub> | 48.75 |
-| **Terminal-RSI-27B** (RPR-2, step 18) | **19.84** <sub>↑2.38</sub> | **86.52** <sub>=0.00</sub> | **16.95** <sub>↑1.95</sub> | **79.00** <sub>↑3.00</sub> | **50.58** |
-
-<div align="center">
-<img src="assets/frontier_model_comparison.png" alt="Frontier comparison" width="85%"/>
-<p><b>External references.</b> External scores reproduce an author-provided reference table, not a re-evaluation under a unified protocol; differences can also reflect harnesses, task coverage and budgets.</p>
-</div>
-
-> [!NOTE]
-> As discussed in the paper, retained-checkpoint gains are not a compute-matched estimate of the benefit of alternation. The first RPR phase used standard GAE ($\gamma=\lambda=1$), and SPR is evaluated through offline rescoring, so these gains do not isolate the causal effect of TB-GAE or SPR.
+| Checkpoint | Terminal-Bench 4.0 | Terminal-Bench 2.1 | Terminal-Bench 3.0 | Terminal-Bench Hard | LHTB (process reward) | SWR100 |
+| --- | :---: | :---: | :---: | :---: | :---: | :---: |
+| Base (Qwen3.8-27B) | 0.00 | 51.70 | 0.00 | 31.00 | 0.21 | 3.00 |
+| RSR-1 | 6.10 | 70.10 | 6.80 | 54.00 | 0.29 | 5.00 |
+| RPR-1 (step 20) | 16.67 | 77.53 | 14.29 | 69.50 | 0.30 | 6.00 |
+| RSR-2 | 17.46 | **86.52** | 15.00 | 76.00 | 0.31 | 6.00 |
+| **Terminal-RSI-27B** (RPR-2, step 18) | **19.84** | **86.52** | **16.95** | **79.00** | **0.37** | **6.00** |
 
 ## 🗂️ Repository Structure
 
@@ -188,7 +179,7 @@ LOAD_ROOT=/ckpt/loadroot_rpr2 bash examples/terminal_rsi/run_rpr2_spr.sh
 | Rollouts, batch, oversampling | 36, 256, 288 | 36, 256, 288 |
 | Retained checkpoint | step 20 | step 18 (**Terminal-RSI-27B**) |
 
-The **Warm-up Critic** uses the same launcher with a cold value head: build an actor-only root (`prepare_load_root.sh <actor> none <root>`) and run with `WARM_CRITIC=0 NUM_CRITIC_ONLY_STEPS=<N> NUM_ROLLOUT=<N>`, where `N` covers one epoch of the task pool. **TB-GAE** is switched on by appending `EXTRA_ARGS="--enable-tb-gae --tb-gae-gamma-turn <γ> --tb-gae-lambda-turn <λ>"`. The **RSR** stages are supervised fine-tuning on verified rewritten trajectories (see slime's SFT recipes, e.g. `scripts/run-qwen3-4B-base-sft.sh`); the RSR data pipeline itself follows the RSR paper and is not part of this release.
+The **Warm-up Critic** uses the same launcher with a cold value head: build an actor-only root (`prepare_load_root.sh <actor> none <root>`) and run with `WARM_CRITIC=0 NUM_CRITIC_ONLY_STEPS=<N> NUM_ROLLOUT=<N>`, where `N` covers one epoch of the task pool. **TB-GAE** is enabled by default for RPR-1 in `configs/harbor_rpr1_fdr.yaml`, with `tb_gae_gamma_turn: 1.0` and `tb_gae_lambda_turn: 1.0`. Override the turn discounts with `EXTRA_ARGS="--tb-gae-gamma-turn <γ> --tb-gae-lambda-turn <λ>"`, or explicitly disable it with `EXTRA_ARGS="--no-enable-tb-gae"`. The **RSR** stages are supervised fine-tuning on verified rewritten trajectories (see slime's SFT recipes, e.g. `scripts/run-qwen3-4B-base-sft.sh`); the RSR data pipeline itself follows the RSR paper and is not part of this release.
 
 **Qwen3.5-122B-A10B Terminal RL.** The same stack also trains the 256-expert MoE model at
 84k context on 64 + 64 GPUs (TP2 × PP4 × CP4, EP16; 8 SGLang engines × 8 GPUs), batch 512,

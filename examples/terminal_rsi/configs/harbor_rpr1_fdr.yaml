@@ -11,6 +11,10 @@
 # Placeholders (__TASKS_DIR__, __EVAL_TASKS_DIR__, __TRIALS_DIR__) are substituted
 # by examples/terminal_rsi/common.sh when the run is launched.
 
+enable_tb_gae: true
+tb_gae_gamma_turn: 1.0
+tb_gae_lambda_turn: 1.0
+
 # ---------------------------------------------------------------------------
 # DATA: the unified 3000-task pool (2400 + 600)
 # ---------------------------------------------------------------------------

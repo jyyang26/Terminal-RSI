@@ -82,6 +82,12 @@ The Warm-up Critic is prepared the same way from a cold value head: build an act
 root (`prepare_load_root.sh <actor> none <root>`) and run with `WARM_CRITIC=0` and
 `NUM_CRITIC_ONLY_STEPS=NUM_ROLLOUT` so that only the critic is updated.
 
+RPR-1 enables TB-GAE by default through `configs/harbor_rpr1_fdr.yaml`, with
+`tb_gae_gamma_turn: 1.0` and `tb_gae_lambda_turn: 1.0`. Explicit CLI flags override
+these YAML settings; use `EXTRA_ARGS="--no-enable-tb-gae"` to disable it.
+TB-GAE requires a Harbor Terminus-2 implementation supporting termination metadata
+version 2 and truncated-trajectory bootstrap state.
+
 Useful switches: `DRY_RUN=1` prints the full command without launching, `DIRECT_RUN=1`
 runs the driver in the current shell instead of `ray job submit`, `RAY_DASHBOARD` points
 at the job API, `MODEL=qwen3.5-122b-a10b` switches `run_eval.sh` to the 122B profile,
