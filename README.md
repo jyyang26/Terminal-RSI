@@ -31,20 +31,20 @@
 
 ## 📖 Overview
 
-Terminal agency is judged by persistent changes to an executable environment rather than by the plausibility of a response. Hundreds of tokens may express one action, thousands of observation tokens may encode no decision, and decisive feedback often arrives many turns later. Effective learning must therefore address both the **scarcity of reproducible successes** and the **alignment of optimization signals with terminal outcomes**.
+Terminal agents must leave an executable environment in a state that passes a protected verifier; fluent plans and locally passed checks are not enough. Long-horizon learning faces **temporal dilation** between tokens and consequential actions, **value drift** after supervised policy changes, and **reward misalignment** between partial progress and strict completion.
 
-**Terminal-RSI** alternates the adopted **Recursive Self-Rewrite (RSR)**, which turns harness-assisted successes into verified public demonstrations, with our proposed **Recursive Policy-Refine (RPR)**, a reinforcement-learning phase that couples a recursively handed-off critic with turn-aware credit assignment and phase-adaptive rewards:
+**Terminal-RSI** alternates adopted **Recursive Self-Rewrite (RSR)** with critic-inheriting **Recursive Policy-Refine (RPR)**. RSR transfers complementary-harness successes through runbook planning, leakage screening, and fresh verified execution into actor-only supervision. RPR recalibrates inherited values before joint PPO updates, coordinating turn-aware credit, evolving rewards, and stage-specific learning rates:
 
-- **Turn-Boundary Skip-Observation GAE (TB-GAE)** keeps token-specific value baselines but applies discount and trace decay only across interaction turns, so observation length no longer attenuates credit. Successor values *and* advantages are carried across computational chunks, so splitting a trajectory introduces no truncation error.
-- **Family Dense Reward (FDR)** normalizes semantic-check progress by a per-family divisor, removing the up-to-795× reward-scale spread between task families.
-- **Success-Prioritized Reward (SPR)** adds a strict-success offset and a saturating progress term, so an incomplete trajectory can never outrank a successful one by accumulating partial checks.
-- **Recursive critic handoff.** The critic is carried unchanged through actor-only RSR stages and briefly recalibrated (four critic-only updates) at the start of every RPR phase.
+- **Turn-Boundary Skip-Observation GAE (TB-GAE)** retains token-specific baselines while applying discount and trace decay only across interaction turns. Observations condition values but are not recursion nodes. Exact continuation across computational chunks requires both successor values and advantages on an unchanged input chain.
+- **Family Dense Reward (FDR)** calibrates semantic progress using frozen per-family divisors derived from historical check counts, rather than a single global reward scale.
+- **Success-Prioritized Reward (SPR)** combines strict-success credit with bounded, saturating partial progress: every failure scores below one and every success at least one.
+- **Recursive critic handoff.** An initial critic-only epoch prepares the Warm-up Critic Model. Actor-only RSR preserves critic weights; each RPR phase then performs four critic-only calibration updates before joint optimization, with a fivefold actor-rate reduction in the second cycle.
 
-Starting from Qwen3.8-27B, the sequence **Base → RSR-1 → RPR-1 → RSR-2 → RPR-2** yields **Terminal-RSI-27B** (RPR-2, step 18), which reaches **86.52%** on Terminal-Bench 2.1, **16.95%** on Terminal-Bench 3.0, **19.84%** on Terminal-Bench 4.0 and **79.00%** on Terminal-Bench Hard. Its **50.58%** four-suite macro-average is up from 20.68% at Base and 34.25% at RSR-1. Separately, rescoring 4,352 fixed trajectories with SPR reduces the failed trajectories' share of reward mass from **50.09%** to **28.72%**.
+From Qwen3.8-27B, **Base → RSR-1 → RPR-1 → RSR-2 → RPR-2** yields **Terminal-RSI-27B** (RPR-2, step 18): **19.84%** on Terminal-Bench 4.0, **86.52%** on 2.1, **16.95%** on 3.0, and **79.00%** on Hard. Four-suite macro-average success rises from **20.68%** to **50.58%**. LHTB process reward increases from **0.21** to **0.37**, with strict completion rising from **0/46** to **5/46**; SWR100 success doubles from **3.00%** to **6.00%**. Separately, rescoring 4,352 fixed trajectories with SPR reduces failed reward share from **50.09%** to **28.72%**, measuring reward allocation rather than an isolated online training effect.
 
 <div align="center">
-<img src="assets/figure1_rsi_main_results.png" alt="Figure 1" width="100%"/>
-<p><b>Figure 1. Retained-stage gains coexist with nonmonotonic exploration.</b> Positions denote Base, RSR-1, RPR-1 (step 20), RSR-2 and RPR-2 (step 18, Terminal-RSI-27B). These are stage positions, not equal compute intervals. Blue diamonds mark RSR, stars the retained RPR checkpoints, and gray branches unretained controls or continuations. LHTB shows completed tasks (left axis) and process reward (right axis).</p>
+<img src="assets/figure1_rsi_main_results.png" alt="Figure 1: five retained stages on terminal and long-horizon benchmarks" width="100%"/>
+<p><b>Figure 1. Evaluation across five retained stages on terminal and long-horizon benchmarks.</b> Positions order Base, RSR-1, RPR-1 (step 20), RSR-2, and RPR-2 (step 18, Terminal-RSI-27B), not equal compute intervals. Dashed lines and diamonds denote RSR; solid lines and stars denote retained RPR; gray branches show discarded alternatives. Terminal-Bench and SWR100 report Mean@3 success (%). LHTB separates mean strictly completed tasks (left axis) from process reward (right axis).</p>
 </div>
 
 ## 📊 Results
