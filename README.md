@@ -51,7 +51,7 @@ From Qwen3.8-27B, **Base → RSR-1 → RPR-1 → RSR-2 → RPR-2** yields **Term
 
 Performance of the five retained checkpoints marked in Figure 1, using the checkpoint scores from the accompanying results table. Terminal-Bench and SWR100 scores are success rates (%); LHTB reports average process reward, not a percentage.
 
-| Checkpoint | Terminal-Bench 4.0 | Terminal-Bench 2.1 | Terminal-Bench 3.0 | Terminal-Bench Hard | LHTB (process reward) | SWR100 |
+| Checkpoint | Terminal-Bench 4.0 | Terminal-Bench 2.1 | Terminal-Bench 3.0 | Terminal-Bench Hard | LHTB (process reward) | SWR100(holdout set) |
 | --- | :---: | :---: | :---: | :---: | :---: | :---: |
 | Base (Qwen3.8-27B) | 0.00 | 51.70 | 0.00 | 31.00 | 0.21 | 3.00 |
 | RSR-1 | 6.10 | 70.10 | 6.80 | 54.00 | 0.29 | 5.00 |
