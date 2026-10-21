@@ -303,7 +303,9 @@ This project is released under the [Apache License 2.0](LICENSE). It is derived 
 
 ## 🙏 Acknowledgements
 
-Terminal-RSI builds on [slime](https://github.com/THUDM/slime), [Megatron-LM](https://github.com/NVIDIA/Megatron-LM), [SGLang](https://github.com/sgl-project/sglang) and [Ray](https://github.com/ray-project/ray). Agent execution uses [Harbor](https://github.com/harbor-framework/harbor), [Terminal-Bench](https://github.com/laude-institute/terminal-bench) and [Daytona](https://www.daytona.io/) sandboxes. We follow the distributed terminal-RL infrastructure of T1 and adopt the Recursive Self-Rewrite procedure of RSR. We thank the authors of these projects.
+We sincerely thank the authors and contributors of [slime](https://github.com/THUDM/slime), [SGLang](https://github.com/sgl-project/sglang), and [Megatron-LM](https://github.com/NVIDIA/Megatron-LM) for their open-source work. These projects provide the foundation for Terminal-RSI's reinforcement-learning framework, rollout inference, and distributed model training, respectively.
+
+Terminal-RSI also builds on [Ray](https://github.com/ray-project/ray). Agent execution uses [Harbor](https://github.com/harbor-framework/harbor), [Terminal-Bench](https://github.com/laude-institute/terminal-bench), and [Daytona](https://www.daytona.io/) sandboxes. We follow the distributed terminal-RL infrastructure of T1 and adopt the Recursive Self-Rewrite procedure of RSR. We thank the authors and contributors of these projects as well.
 
 ## 📬 Contact
 
