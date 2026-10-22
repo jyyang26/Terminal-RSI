@@ -2,7 +2,7 @@
 
 # Terminal-RSI
 
-### Recursive Self-Improving Terminal Agents via Recursive Self-Rewrite and Policy-Refine
+### Terminal-RSI: Recursive Self-Improving Terminal Agents via Recursive Self-Rewrite and Policy-Refine
 
 [![Paper](https://img.shields.io/badge/Paper-arXiv%3A2610.22192-b31b1b.svg)](https://arxiv.org/abs/2610.22192v1)
 [![Project Page](https://img.shields.io/badge/Project-Page-0052D9.svg)](https://jyyang26.github.io/terminal-rsi)
